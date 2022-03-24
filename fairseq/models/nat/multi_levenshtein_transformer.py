@@ -1,0 +1,826 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from fairseq.iterative_refinement_generator import DecoderOut
+from fairseq.models import register_model, register_model_architecture
+from fairseq.models.nat import FairseqNATDecoder, FairseqNATModel, ensemble_decoder
+from fairseq.models.transformer import Embedding, TransformerDecoderLayer
+from fairseq.modules.transformer_sentence_encoder import init_bert_params
+import random as rd
+import numpy as np
+
+from .levenshtein_utils import (
+    _apply_del_words,
+    _apply_ins_masks,
+    _apply_ins_words,
+    _fill,
+    _get_del_targets,
+    _get_ins_targets,
+    _skip,
+    _skip_encoder_out,
+)
+
+from .multi_levenshtein_utils import (
+    pi_del,
+    pi_sel,
+    pi_mask,
+    pi_star,
+    _apply_del,
+    _apply_plh,
+    _apply_cmb,
+    _apply_tok,
+)
+
+
+@register_model("multi_lev_transformer")
+class MultiLevenshteinTransformerModel(FairseqNATModel):
+    def __init__(self, args, encoder, decoder):
+        super().__init__(args, encoder, decoder)
+        #        self.alpha = args.correction_prob
+        self.beta = args.random_del_prob
+        self.gamma = args.selection_noise_prob
+        self.delta = args.completion_noise_prob
+        self.Kmax = args.plh_max_num_insert
+
+    @property
+    def allow_length_beam(self):
+        return False
+
+    @staticmethod
+    def add_args(parser):
+        FairseqNATModel.add_args(parser)
+        parser.add_argument(
+            "--match-suggestion-number",
+            default=3,
+            type=int,
+            help="number of matching propositions to be edited",
+        )
+        parser.add_argument(
+            "--early-exit",
+            default="6,6,6,6",
+            type=str,
+            help="number of decoder layers before del, plh, cmb, tok",
+        )
+        parser.add_argument(
+            "--no-share-discriminator",
+            action="store_true",
+            help="separate parameters for discriminator",
+        )
+        parser.add_argument(
+            "--no-share-maskpredictor",
+            action="store_true",
+            help="separate parameters for mask-predictor",
+        )
+        parser.add_argument(
+            "--share-discriminator-maskpredictor",
+            action="store_true",
+            help="share the parameters for both mask-predictor and discriminator",
+        )
+        parser.add_argument(
+            "--sampling-for-deletion",
+            action="store_true",
+            help="instead of argmax, use sampling to predict the tokens",
+        )
+        parser.add_argument(
+            "--random-del-prob",
+            default=0.2,
+            type=float,
+            help="probability to train from noised target instead of the retrieved sequence",
+        )
+        #        parser.add_argument(
+        #            "--correction-prob",
+        #            default=0.2,
+        #            type=float,
+        #            help="probability to train to correct errors instead",
+        #        )
+        parser.add_argument(
+            "--selection-noise-prob",
+            default=0.2,
+            type=float,
+            help="probability to add noise individually during the selection step",
+        )
+        parser.add_argument(
+            "--completion-noise-prob",
+            default=0.2,
+            type=float,
+            help="probability to use the masked target to predict tokens instead",
+        )
+        parser.add_argument(
+            "--plh-max-num-insert",
+            default=64,
+            type=int,
+            help="Number of placeholders that can be added between 2 consecutive tokens",
+        )
+
+    #        parser.add_argument(
+    #            "--num-retrieved",
+    #            default=3,
+    #            type=int,
+    #            help="Number of sentences retrieved, then edited together to form the final sentence",
+    #        )
+
+    @classmethod
+    def build_decoder(cls, args, tgt_dict, embed_tokens):
+        decoder = MultiLevenshteinTransformerDecoder(args, tgt_dict, embed_tokens)
+        if getattr(args, "apply_bert_init", False):
+            decoder.apply(init_bert_params)
+        return decoder
+
+    def regularize_shapes(self, x, ys, y):
+        bsz = x.size(0)
+        M = max(x.size(-1), ys.size(-1), y.size(-1))
+        N = ys.size(1)
+        shape = (bsz, N + 2, M)
+        X = x.new(*shape).fill_(self.pad)
+        X[:, 0, : x.size(-1)] = x
+        X[:, -1, : y.size(-1)] = y
+        X[:, 1:-1, : ys.size(-1)] = ys
+
+        return X[:, 0, :], X[:, 1:-1, :], X[:, -1, :]
+
+    def forward(self, x, y_init_star, prev_out_toks, tgt_tokens, **kwargs):
+
+        # encoding
+        x, y_init_star, tgt_tokens = self.regularize_shapes(x, y_init_star, tgt_tokens)
+        #        print()
+        #        print("x", x.shape)
+        #        print("y_init_star", y_init_star.shape)
+        #        print("tgt_tokens", tgt_tokens.shape)
+        #        print()
+        encoder_out = self.encoder(x, **kwargs)
+
+        # choose init
+        if rd.random() > self.beta:
+            y_del = y_init_star
+            #            print("pi star")
+            # obtain y_plh_star, y_cmb_star, y_tok_star with k-multi-alignment (pi^*)
+            with torch.no_grad():
+                res = pi_star(
+                    y_init_star,
+                    tgt_tokens,
+                    pad_symbol=self.pad,
+                    plh_symbol=self.unk,
+                    Kmax=self.Kmax,
+                    device=x.device,
+                )
+
+        else:
+            y_del = y_init_star
+            #            print("pi del")
+            with torch.no_grad():
+                res = pi_del(
+                    y_init_star.shape,
+                    tgt_tokens,
+                    pad_symbol=self.pad,
+                    plh_symbol=self.unk,
+                    bos_symbol=self.bos,
+                    eos_symbol=self.eos,
+                    Kmax=self.Kmax,
+                    device=x.device,
+                )
+
+        y_plh = res["y_plh"]
+        y_cmb = res["y_cmb"]
+        y_tok = res["y_tok"]
+
+        del_tgt = res["del_tgt"]
+        del_mask = res["del_mask"]
+
+        plh_tgt = res["plh_tgt"]
+        plh_mask = res["plh_mask"]
+
+        cmb_tgt = res["cmb_tgt"]
+        cmb_mask = res["cmb_mask"]
+
+        tok_tgt = res["tok_tgt"]
+        tok_mask = res["tok_mask"]
+
+        y_cmb = pi_sel(
+            y_cmb,
+            y_init_star,
+            self.gamma,
+            pad_symbol=self.pad,
+            plh_symbol=self.unk,
+            bos_symbol=self.bos,
+            eos_symbol=self.eos,
+        )
+
+        if rd.random() <= self.delta:
+            y_tok, tok_tgt, tok_mask = pi_mask(
+                y_tok,
+                pad_symbol=self.pad,
+                plh_symbol=self.unk,
+                bos_symbol=self.bos,
+                eos_symbol=self.eos,
+            )
+
+        #        print("encoder out ", encoder_out.keys())
+        #        print("y_del", y_del.shape)
+        #        print("y_plh", y_plh.shape)
+        #        print("y_cmb", y_cmb.shape)
+        #        print("y_tok", y_tok.shape)
+
+        del_out, _ = self.decoder.forward_del(
+            normalize=False, prev_output_tokens=y_del, encoder_out=encoder_out,
+        )
+
+        plh_out, _ = self.decoder.forward_plh(
+            normalize=False, prev_output_tokens=y_plh, encoder_out=encoder_out,
+        )
+
+        cmb_out, _ = self.decoder.forward_cmb(
+            normalize=False, prev_output_tokens=y_cmb, encoder_out=encoder_out,
+        )
+
+        tok_out, _ = self.decoder.forward_tok(
+            normalize=False, prev_output_tokens=y_tok, encoder_out=encoder_out,
+        )
+
+        del_out = F.softmax(del_out, -1)
+        plh_out = F.softmax(plh_out, -1)
+        cmb_out = F.softmax(cmb_out, -1)
+        tok_out = F.softmax(tok_out, -1)
+        #
+        #        print("#############################")
+        #        print("del_out", del_out.shape)
+        #        print("plh_out", plh_out.shape)
+        #        print("cmb_out", cmb_out.shape)
+        #        print("tok_out", tok_out.shape)
+        #        print()
+        #        print("del_tgt", del_tgt.shape)
+        #        print("plh_tgt", plh_tgt.shape)
+        #        print("cmb_tgt", cmb_tgt.shape)
+        #        print("tok_tgt", tok_tgt.shape)
+        #        print()
+        #        print("del_mask", del_mask.shape)
+        #        print("plh_mask", plh_mask.shape)
+        #        print("cmb_mask", cmb_mask.shape)
+        #        print("tok_mask", tok_mask.shape)
+
+        return {
+            "plh": {"out": plh_out, "tgt": plh_tgt, "mask": plh_mask, "ls": 0.01,},
+            "tok": {
+                "out": tok_out,
+                "tgt": tok_tgt,
+                "mask": tok_mask,
+                "ls": self.args.label_smoothing,
+                "nll_loss": True,
+            },
+            "del": {"out": del_out, "tgt": del_tgt, "mask": del_mask,},
+            "cmb": {"out": cmb_out, "tgt": cmb_tgt, "mask": cmb_mask},
+        }
+
+    def forward_decoder(
+        self, decoder_out, encoder_out, eos_penalty=0.0, max_ratio=None, **kwargs
+    ):
+
+        output_tokens = decoder_out.output_tokens  # B x N x M
+        history = decoder_out.history
+
+        max_lens = 255
+        verbose = 1
+
+        # delete words
+        # do not delete tokens if it is <s> </s>
+
+        can_del_word = (output_tokens.ne(self.pad).sum(-1) > 2).any(-1)
+
+        if can_del_word.sum() != 0:  # we cannot delete, skip
+
+            # Skip ignores batch element with no possible deletion
+            del_out, _ = self.decoder.forward_del(
+                normalize=True,
+                prev_output_tokens=_skip(output_tokens, can_del_word),
+                encoder_out=_skip_encoder_out(self.encoder, encoder_out, can_del_word),
+            )
+            del_out = F.softmax(del_out, -1)
+            del_pred = del_out.max(-1)[1].bool()
+            if verbose:
+                ranger = (
+                    torch.arange(2, dtype=del_out.dtype, device=del_out.device)
+                    .view(1, 1, 1, -1)
+                    .expand(del_out.shape)
+                )
+                res = (ranger * del_out).sum(-1).mean(0)
+                #                print("del_pred mean", del_pred.float().mean(0))
+                print("del_pred expect", res)
+
+            _tokens = _apply_del(
+                output_tokens[can_del_word], del_pred, self.pad, self.bos, self.eos,
+            )
+            output_tokens = _fill(output_tokens, can_del_word, _tokens, self.pad)
+
+            if history is not None:
+                history.append(output_tokens.clone())
+
+        # insert placeholders
+        can_plh = (output_tokens.ne(self.pad).sum(-1) < max_lens).any(-1)
+        if can_plh.sum() != 0:
+            plh_out, _ = self.decoder.forward_plh(
+                normalize=True,
+                prev_output_tokens=_skip(output_tokens, can_plh),
+                encoder_out=_skip_encoder_out(self.encoder, encoder_out, can_plh),
+            )
+            if eos_penalty > 0.0:
+                plh_out[:, :, :, 0] = plh_out[:, :, :, 0] - eos_penalty
+            plh_out = F.softmax(plh_out, -1)
+            plh_pred = plh_out.max(-1)[1]
+            plh_pred = torch.minimum(
+                plh_pred,
+                torch.tensor(255, device=plh_pred.device, dtype=plh_pred.dtype),
+            )
+            if verbose:
+                ranger = (
+                    torch.arange(
+                        plh_out.size(-1), dtype=plh_out.dtype, device=plh_out.device
+                    )
+                    .view(1, 1, 1, -1)
+                    .expand(plh_out.shape)
+                )
+                res = (ranger * plh_out).sum(-1).mean(0)
+                print("plh_pred expect", res)
+            #                print("plh_pred mean", plh_pred.float().mean(0))
+
+            _tokens = _apply_plh(
+                output_tokens[can_plh], plh_pred, self.pad, self.unk, self.eos,
+            )
+            output_tokens = _fill(output_tokens, can_plh, _tokens, self.pad)
+
+            if history is not None:
+                history.append(output_tokens.clone())
+        cmb_len = (output_tokens == self.eos).long().argsort(-1)[:, :, -1].max(-1)[0]
+        mask_inf = (
+            (
+                torch.arange(output_tokens.size(-1), device=output_tokens.device)
+                .view(1, -1)
+                .expand(len(cmb_len), -1)
+                < cmb_len.view(-1, 1).expand(-1, output_tokens.size(-1))
+            )
+            .view(len(cmb_len), 1, output_tokens.size(-1))
+            .expand(-1, output_tokens.size(1), -1)
+        )
+        mask_eq = (
+            (
+                torch.arange(output_tokens.size(-1), device=output_tokens.device)
+                .view(1, -1)
+                .expand(len(cmb_len), -1)
+                == cmb_len.view(-1, 1).expand(-1, output_tokens.size(-1))
+            )
+            .view(len(cmb_len), 1, output_tokens.size(-1))
+            .expand(-1, output_tokens.size(1), -1)
+        )
+        output_tokens[mask_eq] = self.eos
+        output_tokens[
+            mask_inf & ((output_tokens == self.eos) | (output_tokens == self.pad))
+        ] = self.unk
+
+        # merge sequences
+        cmb_out, _ = self.decoder.forward_cmb(
+            normalize=True, prev_output_tokens=output_tokens, encoder_out=encoder_out,
+        )
+        plh_out = F.softmax(plh_out, -1)
+        cmb_pred = cmb_out[:, :, :, 1]
+        #        cmb_pred = cmb_out.max(-1)[1]
+        if verbose:
+            ranger = (
+                torch.arange(
+                    cmb_out.size(-1), dtype=cmb_out.dtype, device=cmb_out.device
+                )
+                .view(1, 1, 1, -1)
+                .expand(cmb_out.shape)
+            )
+            res = (ranger * cmb_out).sum(-1).mean(0)
+            print("cmb_pred expect", res)
+        #            print("cmb_pred mean", cmb_out.max(-1)[1].float().mean(0))
+
+        output_tokens = _apply_cmb(
+            output_tokens, cmb_pred, self.pad, self.bos, self.eos, self.unk,
+        )
+        if history is not None:
+            history.append(output_tokens.clone())
+
+        # insert tok
+        can_tok = output_tokens.eq(self.unk).sum(1) > 0
+        if can_tok.sum() != 0:
+            tok_out, _ = self.decoder.forward_tok(
+                normalize=True,
+                prev_output_tokens=_skip(output_tokens, can_tok),
+                encoder_out=_skip_encoder_out(self.encoder, encoder_out, can_tok),
+            )
+            _, tok_pred = tok_out.max(-1)
+            tok_out = F.softmax(tok_out, -1)
+            if verbose:
+                ranger = (
+                    torch.arange(
+                        tok_pred.size(-1), dtype=tok_pred.dtype, device=tok_pred.device
+                    )
+                    .view(1, 1, 1, -1)
+                    .expand(tok_pred.shape)
+                )
+                res = (ranger * tok_pred).sum(-1).mean(0)
+                print("tok_pred expect", res)
+            #                print("tok_pred mean", tok_pred.float().mean(0))
+
+            _tokens = _apply_tok(output_tokens[can_tok], tok_pred, self.unk,)
+
+            output_tokens = _fill(output_tokens, can_tok, _tokens, self.pad)
+
+            if history is not None:
+                history.append(output_tokens.clone())
+        # delete some unnecessary paddings
+        cut_off = output_tokens.ne(self.pad).sum(-1).max()
+        output_tokens = output_tokens[:, :cut_off]
+
+        return decoder_out._replace(output_tokens=output_tokens, history=history,)
+
+    def initialize_output_tokens(self, encoder_out, multi_src_tokens):
+
+        return DecoderOut(
+            output_tokens=multi_src_tokens,
+            output_scores=torch.zeros(
+                multi_src_tokens.size(0), multi_src_tokens.size(2)
+            ).type_as(encoder_out["encoder_out"][0]),
+            attn=None,
+            step=0,
+            max_step=0,
+            history=None,
+        )
+
+    def _initialize_output_tokens(self, encoder_out, src_tokens, multi_src_tokens):
+        initial_output_tokens = src_tokens.new_zeros(src_tokens.size(0), 2)
+        initial_output_tokens[:, 0] = self.bos
+        initial_output_tokens[:, 1] = self.eos
+
+        initial_output_scores = initial_output_tokens.new_zeros(
+            *initial_output_tokens.size()
+        ).type_as(encoder_out["encoder_out"][0])
+
+        return DecoderOut(
+            output_tokens=initial_output_tokens,
+            output_scores=initial_output_scores,
+            attn=None,
+            step=0,
+            max_step=0,
+            history=None,
+        )
+
+
+class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
+    def __init__(self, args, dictionary, embed_tokens, no_encoder_attn=False):
+        super().__init__(
+            args, dictionary, embed_tokens, no_encoder_attn=no_encoder_attn
+        )
+        self.dictionary = dictionary
+        self.bos = dictionary.bos()
+        self.unk = dictionary.unk()
+        self.eos = dictionary.eos()
+        self.sampling_for_deletion = getattr(args, "sampling_for_deletion", False)
+        self.Kmax = args.plh_max_num_insert
+        self.embed_plh = Embedding(self.Kmax, self.output_embed_dim * 2, None)
+        self.embed_del = Embedding(2, self.output_embed_dim, None)
+        #        self.embed_cmb = Embedding(2, self.output_embed_dim, None)
+        self.embed_cmb = nn.Linear(self.output_embed_dim, 1)
+        self.embed_tok = nn.Linear(self.output_embed_dim, len(self.dictionary))
+        self.num_retrieved = args.num_retrieved
+        self.embed_seq_tok = embed_tokens
+        self.embed_seq_num = Embedding(
+            self.num_retrieved + 1, embed_tokens.embedding_dim, None
+        )
+
+        # del_word, ins_mask, ins_word
+        self.early_exit = [int(i) for i in args.early_exit.split(",")]
+        assert len(self.early_exit) == 4
+
+        # copy layers for mask-predict/deletion
+        self.layers_del = None
+        if getattr(args, "no_share_discriminator", False):
+            self.layers_del = nn.ModuleList(
+                [
+                    TransformerDecoderLayer(args, no_encoder_attn)
+                    for _ in range(self.early_exit[0])
+                ]
+            )
+        self.layers_plh = None
+        if getattr(args, "no_share_maskpredictor", False):
+            self.layers_msk = nn.ModuleList(
+                [
+                    TransformerDecoderLayer(args, no_encoder_attn)
+                    for _ in range(self.early_exit[1])
+                ]
+            )
+        self.layers_cmb = None
+        if getattr(args, "no_share_discriminator", False):
+            self.layers_cmb = nn.ModuleList(
+                [
+                    TransformerDecoderLayer(args, no_encoder_attn)
+                    for _ in range(self.early_exit[2])
+                ]
+            )
+        self.layers_tok = None
+        if getattr(args, "no_share_maskpredictor", False):
+            self.layers_tok = nn.ModuleList(
+                [
+                    TransformerDecoderLayer(args, no_encoder_attn)
+                    for _ in range(self.early_exit[3])
+                ]
+            )
+        if getattr(args, "share_discriminator_maskpredictor", False):
+            assert getattr(
+                args, "no_share_discriminator", False
+            ), "must set saperate discriminator"
+            self.layers_msk = self.layers_del
+
+    def output_layer(self, features):
+        return self.embed_tok(features)
+
+    def extract_features(
+        self,
+        prev_output_tokens,
+        encoder_out=None,
+        early_exit=None,
+        layers=None,
+        multi_len=False,
+        pad_to_same=False,
+        **unused
+    ):
+        """
+        Similar to *forward* but only return features.
+        Inputs:
+            prev_output_tokens: Tensor(B, T)
+            encoder_out: a dictionary of hidden states and masks
+
+        Returns:
+            tuple:
+                - the decoder's features of shape `(batch, tgt_len, embed_dim)`
+                - a dictionary with any model-specific outputs
+            the LevenshteinTransformer decoder has full-attention to all generated tokens
+        """
+        # prev_output_tokens: batch x N x M
+        if multi_len and len(prev_output_tokens.shape) == 3:
+            if self.embed_positions is not None:
+                positions = self.embed_positions(prev_output_tokens)
+            else:
+                positions = None
+            seq_emb = self.embed_seq_num(
+                torch.arange(
+                    prev_output_tokens.size(1), device=prev_output_tokens.device
+                )
+            )
+            seq_emb = seq_emb.unsqueeze(0).repeat(prev_output_tokens.size(0), 1, 1)
+            seq_emb = seq_emb.unsqueeze(2).repeat(1, 1, prev_output_tokens.size(2), 1)
+            tok_emb = self.embed_scale * self.embed_tokens(prev_output_tokens)
+
+            # change shape (batch x N x M x p) to (batch x NM x p)
+            positions = positions.view(
+                prev_output_tokens.size(0),
+                prev_output_tokens.size(1) * prev_output_tokens.size(2),
+                self.embed_seq_num.embedding_dim,
+            )
+            seq_emb = seq_emb.view(
+                prev_output_tokens.size(0),
+                prev_output_tokens.size(1) * prev_output_tokens.size(2),
+                self.embed_seq_num.embedding_dim,
+            )
+            tok_emb = tok_emb.view(
+                prev_output_tokens.size(0),
+                prev_output_tokens.size(1) * prev_output_tokens.size(2),
+                self.embed_seq_num.embedding_dim,
+            )
+
+        else:
+            # embed positions
+            positions = (
+                self.embed_positions(prev_output_tokens)
+                if self.embed_positions is not None
+                else None
+            )
+            seq_emb = self.embed_seq_num(
+                torch.tensor(self.embed_seq_num.num_embeddings - 1).to(
+                    prev_output_tokens.device
+                )
+            )
+            # embed tokens and positions
+            tok_emb = self.embed_scale * self.embed_tokens(prev_output_tokens)
+
+        x = tok_emb
+
+        if self.project_in_dim is not None:
+            x = self.project_in_dim(x)
+
+        if positions is not None:
+            x += positions
+        if seq_emb is not None:
+            x += seq_emb
+        x = self.dropout_module(x)
+
+        # B x T x C -> T x B x C
+        x = x.transpose(0, 1)
+        attn = None
+        inner_states = [x]
+
+        # decoder layers
+        decoder_padding_mask = prev_output_tokens.eq(self.padding_idx)
+        layers = self.layers if layers is None else layers
+        early_exit = len(layers) if early_exit is None else early_exit
+        for _, layer in enumerate(layers[:early_exit]):
+            x, attn, _ = layer(
+                x,
+                encoder_out["encoder_out"][0]
+                if (encoder_out is not None and len(encoder_out["encoder_out"]) > 0)
+                else None,
+                encoder_out["encoder_padding_mask"][0]
+                if (
+                    encoder_out is not None
+                    and len(encoder_out["encoder_padding_mask"]) > 0
+                )
+                else None,
+                self_attn_mask=None,
+                self_attn_padding_mask=decoder_padding_mask.view(
+                    decoder_padding_mask.size(0), -1
+                ),
+            )
+            inner_states.append(x)
+
+        if self.layer_norm:
+            x = self.layer_norm(x)
+
+        # T x B x C -> B x T x C
+        x = x.transpose(0, 1)
+
+        if self.project_out_dim is not None:
+            x = self.project_out_dim(x)
+
+        if multi_len:
+            shape = (
+                prev_output_tokens.size(0),
+                prev_output_tokens.size(1),
+                prev_output_tokens.size(2),
+                -1,
+            )
+            x = x.view(shape)
+            if attn is not None:
+                attn = attn.view(shape)
+
+        return x, {"attn": attn, "inner_states": inner_states}
+
+    @ensemble_decoder
+    def forward_del(self, normalize, encoder_out, prev_output_tokens, **unused):
+        features, extra = self.extract_features(
+            prev_output_tokens,
+            encoder_out=encoder_out,
+            early_exit=self.early_exit[0],
+            layers=self.layers_del,
+            multi_len=True,
+            **unused
+        )
+        # features: batch x N x M x d
+        decoder_out = F.linear(features, self.embed_del.weight)
+        if normalize:
+            return F.log_softmax(decoder_out, -1), extra["attn"]
+        return decoder_out, extra["attn"]
+
+    @ensemble_decoder
+    def forward_plh(self, normalize, encoder_out, prev_output_tokens, **unused):
+        features, extra = self.extract_features(
+            prev_output_tokens,
+            encoder_out=encoder_out,
+            early_exit=self.early_exit[1],
+            layers=self.layers_plh,
+            multi_len=True,
+            **unused
+        )
+        # features: batch x N x M x d
+        print("features", features.shape)
+        features_cat = torch.cat([features[:, :, :-1, :], features[:, :, 1:, :]], -1)
+        print("features_cat", features_cat.shape)
+        print("self.embed_plh.weight", self.embed_plh.weight.shape)
+        decoder_out = F.linear(features_cat, self.embed_plh.weight)
+        if normalize:
+            return F.log_softmax(decoder_out, -1), extra["attn"]
+        return decoder_out, extra["attn"]
+
+    @ensemble_decoder
+    def forward_cmb(self, normalize, encoder_out, prev_output_tokens, **unused):
+        features, extra = self.extract_features(
+            prev_output_tokens,
+            encoder_out=encoder_out,
+            early_exit=self.early_exit[1],
+            layers=self.layers_cmb,
+            multi_len=True,
+            **unused
+        )
+        # features: batch x N x M x d
+        decoder_out = (
+            self.embed_cmb(features).transpose(1, 2).squeeze(-1)
+        )  # batch x M x N
+        decoder_out = torch.sigmoid(decoder_out)
+        decoder_out = torch.stack(
+            (decoder_out, 1 - decoder_out), dim=-1
+        )  # batch x M x N x 2
+
+        # decoder_out: batch x M x N
+
+        return decoder_out[:, :, :, :], extra["attn"]
+
+    @ensemble_decoder
+    def forward_tok(self, normalize, encoder_out, prev_output_tokens, **unused):
+        features, extra = self.extract_features(
+            prev_output_tokens,
+            encoder_out=encoder_out,
+            early_exit=self.early_exit[2],
+            layers=self.layers,
+            **unused
+        )
+        # features: batch x M x d
+        decoder_out = self.output_layer(features)
+        if normalize:
+            return F.log_softmax(decoder_out, -1), extra["attn"]
+        return decoder_out, extra["attn"]
+
+
+@register_model_architecture(
+    "multi_lev_transformer", "multi_levenshtein_transformer_base"
+)
+def multi_levenshtein_base_architecture(args):
+    args.encoder_embed_path = getattr(args, "encoder_embed_path", None)
+    args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 512)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 2048)
+    args.encoder_layers = getattr(args, "encoder_layers", 6)
+    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 8)
+    args.encoder_normalize_before = getattr(args, "encoder_normalize_before", False)
+    args.encoder_learned_pos = getattr(args, "encoder_learned_pos", False)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", args.encoder_embed_dim)
+    args.decoder_ffn_embed_dim = getattr(
+        args, "decoder_ffn_embed_dim", args.encoder_ffn_embed_dim
+    )
+    args.decoder_layers = getattr(args, "decoder_layers", 6)
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 8)
+    args.decoder_normalize_before = getattr(args, "decoder_normalize_before", False)
+    args.decoder_learned_pos = getattr(args, "decoder_learned_pos", False)
+    args.attention_dropout = getattr(args, "attention_dropout", 0.0)
+    args.activation_dropout = getattr(args, "activation_dropout", 0.0)
+    args.activation_fn = getattr(args, "activation_fn", "relu")
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.adaptive_softmax_cutoff = getattr(args, "adaptive_softmax_cutoff", None)
+    args.adaptive_softmax_dropout = getattr(args, "adaptive_softmax_dropout", 0)
+    args.share_decoder_input_output_embed = getattr(
+        args, "share_decoder_input_output_embed", False
+    )
+    args.share_all_embeddings = getattr(args, "share_all_embeddings", False)
+    args.no_token_positional_embeddings = getattr(
+        args, "no_token_positional_embeddings", False
+    )
+    args.adaptive_input = getattr(args, "adaptive_input", False)
+    args.apply_bert_init = getattr(args, "apply_bert_init", False)
+
+    args.decoder_output_dim = getattr(
+        args, "decoder_output_dim", args.decoder_embed_dim
+    )
+    args.sampling_for_deletion = getattr(args, "sampling_for_deletion", False)
+    args.decoder_input_dim = getattr(args, "decoder_input_dim", args.decoder_embed_dim)
+    args.early_exit = getattr(args, "early_exit", "6,6,6")
+    args.no_share_discriminator = getattr(args, "no_share_discriminator", False)
+    args.no_share_maskpredictor = getattr(args, "no_share_maskpredictor", False)
+    args.share_discriminator_maskpredictor = getattr(
+        args, "share_discriminator_maskpredictor", False
+    )
+    args.no_share_last_layer = getattr(args, "no_share_last_layer", False)
+
+
+@register_model_architecture("multi_lev_transformer", "multi_levenshtein_transformer")
+def multi_levenshtein_transformer_wmt_en_de(args):
+    multi_levenshtein_base_architecture(args)
+
+
+# similar parameters used in the "Attention Is All You Need" paper (Vaswani et al., 2017)
+@register_model_architecture(
+    "multi_lev_transformer", "multi_levenshtein_transformer_vaswani_big"
+)
+def multi_levenshtein_transformer_vaswani_wmt_en_de_big(args):
+    args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 1024)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 4096)
+    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 16)
+    args.encoder_normalize_before = getattr(args, "encoder_normalize_before", False)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 1024)
+    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 4096)
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 16)
+    args.dropout = getattr(args, "dropout", 0.3)
+    multi_levenshtein_base_architecture(args)
+
+
+# default parameters used in tensor2tensor implementation
+@register_model_architecture(
+    "multi_lev_transformer", "multi_levenshtein_transformer_big"
+)
+def multi_levenshtein_transformer_wmt_en_de_big_t2t(args):
+    args.encoder_normalize_before = getattr(args, "encoder_normalize_before", True)
+    args.decoder_normalize_before = getattr(args, "decoder_normalize_before", True)
+    args.attention_dropout = getattr(args, "attention_dropout", 0.1)
+    args.activation_dropout = getattr(args, "activation_dropout", 0.1)
+    multi_levenshtein_transformer_vaswani_wmt_en_de_big(args)
