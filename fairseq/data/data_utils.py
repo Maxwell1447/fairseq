@@ -33,6 +33,48 @@ def infer_language_pair(path):
     return src, dst
 
 
+def collate_tokens_list(
+    values,
+    pad_idx,
+    eos_idx=None,
+    left_pad=False,
+    move_eos_to_beginning=False,
+    pad_to_length=None,
+    pad_to_multiple=1,
+    pad_to_bsz=None,
+):
+    """Convert a list of 1d tensors into a padded 2d tensor."""
+    if len(values[0]) == 0:
+        return None
+    k = len(values[0])
+    size = max(max(vv.size(0) for vv in v) for v in values)
+    size = size if pad_to_length is None else max(size, pad_to_length)
+    if pad_to_multiple != 1 and size % pad_to_multiple != 0:
+        size = int(((size - 0.1) // pad_to_multiple + 1) * pad_to_multiple)
+
+    batch_size = len(values) if pad_to_bsz is None else max(len(values), pad_to_bsz)
+    res = values[0][0].new(batch_size, k, size).fill_(pad_idx)
+
+    def copy_tensor(src, dst):
+        assert dst.numel() == src.numel()
+        if move_eos_to_beginning:
+            if eos_idx is None:
+                # if no eos_idx is specified, then use the last token in src
+                dst[0] = src[-1]
+            else:
+                dst[0] = eos_idx
+            dst[1:] = src[:-1]
+        else:
+            dst.copy_(src)
+
+    for i, v in enumerate(values):
+        for kk in range(k):
+            copy_tensor(v[kk], res[i][kk][size - len(v[kk]) :] if left_pad else res[i][kk][: len(v[kk])])
+    return res
+
+
+
+
 def collate_tokens(
     values,
     pad_idx,
@@ -267,6 +309,49 @@ def filter_paired_dataset_indices_by_size(src_sizes, tgt_sizes, indices, max_siz
         ignored = indices[
             (src_sizes[indices] > max_src_size) | (tgt_sizes[indices] > max_tgt_size)
         ]
+    if len(ignored) > 0:
+        if tgt_sizes is None:
+            indices = indices[src_sizes[indices] <= max_src_size]
+        else:
+            indices = indices[
+                (src_sizes[indices] <= max_src_size)
+                & (tgt_sizes[indices] <= max_tgt_size)
+            ]
+    return indices, ignored.tolist()
+
+
+def filter_multi_source_dataset_indices_by_size(src_sizes, multi_src_sizes, tgt_sizes, indices, max_sizes):
+    """Filter a list of sample indices. Remove those that are longer
+        than specified in max_sizes.
+
+    Args:
+        indices (np.array): original array of sample indices
+        max_sizes (int or list[int] or tuple[int]): max sample size,
+            can be defined separately for src and tgt (then list or tuple)
+
+    Returns:
+        np.array: filtered sample array
+        list: list of removed indices
+    """
+    max_multi_src_size = None
+    if max_sizes is None:
+        return indices, []
+    if type(max_sizes) in (int, float):
+        max_src_size, max_tgt_size = max_sizes, max_sizes
+    elif len(max_sizes) == 2:
+        max_src_size, max_tgt_size = max_sizes
+    else:
+        max_src_size, max_multi_src_size, max_tgt_size = max_sizes
+    mask = (src_sizes[indices] > max_src_size)
+    if tgt_sizes is not None:
+        ignored = indices[src_sizes[indices] > max_src_size]
+        mask = mask | (tgt_sizes[indices] > max_tgt_size)
+    if max_multi_src_size is not None:
+        for max_single_src_size in max_multi_src_size:
+            mask = mask | (max_single_src_size[indices] > max_tgt_size)
+
+    ignored = indices[mask]
+
     if len(ignored) > 0:
         if tgt_sizes is None:
             indices = indices[src_sizes[indices] <= max_src_size]

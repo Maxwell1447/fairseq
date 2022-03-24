@@ -116,6 +116,9 @@ def main(args):
     src_dict.save(dict_path(args.source_lang))
     if target and tgt_dict is not None:
         tgt_dict.save(dict_path(args.target_lang))
+        
+    if args.dict_only:
+        return
 
     def make_binary_dataset(vocab, input_prefix, output_prefix, lang, num_workers):
         logger.info("[{}] Dictionary: {} types".format(lang, len(vocab)))

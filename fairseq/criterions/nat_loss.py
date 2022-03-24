@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 from torch import Tensor
+import os
 
 
 @register_criterion("nat_loss")
@@ -47,9 +48,15 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
                 if dim is None
                 else x.float().mean(dim).type_as(x)
             )
-
         if masks is not None:
-            outputs, targets = outputs[masks], targets[masks]
+            print("+++++++++++", name)
+            print("out", outputs.shape, outputs.device, outputs.dtype)
+            print("tgt", targets.shape, targets.device, targets.dtype)
+            print("masks", masks.shape, masks.device, masks.dtype)
+            print()
+
+            outputs = outputs[masks]
+            targets = targets[masks]
 
         if masks is not None and not masks.any():
             nll_loss = torch.tensor(0)
@@ -57,11 +64,16 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
         else:
             logits = F.log_softmax(outputs, dim=-1)
             if targets.dim() == 1:
+                print("logits", logits.shape, logits.dtype)
+                print("logits", "min", logits.min(), "max", logits.max())
+                print("targets", targets.shape, targets.dtype)
+                print("targets", "min", targets.min(), "max", targets.max())
                 losses = F.nll_loss(logits, targets.to(logits.device), reduction="none")
 
             else:  # soft-labels
                 losses = F.kl_div(logits, targets.to(logits.device), reduction="none")
-                losses = losses.sum(-1)
+                while losses.dim() > 1:
+                    losses = losses.sum(-1)
 
             nll_loss = mean_ds(losses)
             if label_smoothing > 0:
@@ -92,8 +104,12 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
             sample["net_input"]["src_lengths"],
         )
         tgt_tokens, prev_output_tokens = sample["target"], sample["prev_target"]
-
-        outputs = model(src_tokens, src_lengths, prev_output_tokens, tgt_tokens)
+        if "multi_src_tokens" in sample["net_input"]:
+            multi_src_tokens = sample["net_input"]["multi_src_tokens"]
+#            outputs = model(1,2,3,4,5)
+            outputs = model(src_tokens, multi_src_tokens, prev_output_tokens, tgt_tokens)
+        else:
+            outputs = model(src_tokens, src_lengths, prev_output_tokens, tgt_tokens)
         losses, nll_loss = [], []
 
         for obj in outputs:

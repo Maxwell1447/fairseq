@@ -120,6 +120,16 @@ try:
             )
         ]
     )
+    extensions.extend(
+        [
+            cpp_extension.CppExtension(
+                "fairseq.libnat2",
+                sources=[
+                    "fairseq/clib/libnat2/edit_dist.cpp",
+                ],
+            )
+        ]
+    )
     if "CUDA_HOME" in os.environ:
         extensions.extend(
             [

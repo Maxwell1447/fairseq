@@ -129,11 +129,17 @@ class IterativeRefinementGenerator(object):
         # TODO: better encoder inputs?
         src_tokens = sample["net_input"]["src_tokens"]
         src_lengths = sample["net_input"]["src_lengths"]
+        if "multi_src_tokens" in sample["net_input"]:
+            multi_src_tokens = sample["net_input"]["multi_src_tokens"]
+#            multi_src_lens = sample["net_input"]["multi_src_lens"]
         bsz, src_len = src_tokens.size()
 
         # initialize
         encoder_out = model.forward_encoder([src_tokens, src_lengths])
-        prev_decoder_out = model.initialize_output_tokens(encoder_out, src_tokens)
+        if "multi_src_tokens" in sample["net_input"]:
+            prev_decoder_out = model.initialize_output_tokens(encoder_out, multi_src_tokens)
+        else:
+            prev_decoder_out = model.initialize_output_tokens(encoder_out, src_tokens)
 
         if self.beam_size > 1:
             assert (
@@ -212,7 +218,7 @@ class IterativeRefinementGenerator(object):
                 prev_decoder_out, encoder_out, **decoder_options
             )
 
-            if self.adaptive:
+            if self.adaptive and not "multi_src_tokens" in sample["net_input"]:
                 # terminate if there is a loop
                 terminated, out_tokens, out_scores, out_attn = is_a_loop(
                     prev_output_tokens,
@@ -231,7 +237,7 @@ class IterativeRefinementGenerator(object):
                     decoder_out.output_tokens.size(0)
                 ).bool()
 
-            if step == self.max_iter:  # reach last iteration, terminate
+            if step == self.max_iter or "multi_src_tokens" in sample["net_input"]:  # reach last iteration, terminate
                 terminated.fill_(1)
 
             # collect finalized sentences
@@ -246,8 +252,9 @@ class IterativeRefinementGenerator(object):
 
             if self.retain_history:
                 finalized_history_tokens = [h[terminated] for h in decoder_out.history]
-
+            
             for i in range(finalized_idxs.size(0)):
+                
                 finalized[finalized_idxs[i]] = [
                     finalized_hypos(
                         step,
@@ -267,7 +274,7 @@ class IterativeRefinementGenerator(object):
                         )
 
             # check if all terminated
-            if terminated.sum() == terminated.size(0):
+            if terminated.sum() == terminated.size(0) or "multi_src_tokens" in sample["net_input"]:
                 break
 
             # for next step

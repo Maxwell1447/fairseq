@@ -218,6 +218,16 @@ def _main(cfg: DictConfig, output_file):
                 )
             else:
                 src_tokens = None
+            if "multi_src_tokens" in sample["net_input"]:
+                multi_src_tokens = [
+                        utils.strip_pad(
+                                sample["net_input"]["multi_src_tokens"][i, n, :], 
+                                tgt_dict.pad()) 
+                        for n in range(sample["net_input"]["multi_src_tokens"].size(1))
+                        ]
+            else:
+                multi_src_tokens = None
+                        
 
             target_tokens = None
             if has_target:
@@ -247,14 +257,29 @@ def _main(cfg: DictConfig, output_file):
                             generator
                         ),
                     )
+                if multi_src_tokens is not None:
+                    multi_src_str = [tgt_dict.string(
+                        multi_src_token,
+                        cfg.common_eval.post_process,
+                        escape_unk=True,
+                        extra_symbols_to_ignore=get_symbols_to_strip_from_output(
+                            generator
+                        ),
+                    )
+                        for multi_src_token in multi_src_tokens]
 
             src_str = decode_fn(src_str)
             if has_target:
                 target_str = decode_fn(target_str)
+            if multi_src_tokens is not None:
+                multi_src_str = [decode_fn(solo_str) for solo_str in multi_src_str]
 
             if not cfg.common_eval.quiet:
                 if src_dict is not None:
                     print("S-{}\t{}".format(sample_id, src_str), file=output_file)
+                if multi_src_tokens is not None:
+                    for k, solo_str in enumerate(multi_src_str):
+                        print("S{}-{}\t{}".format(k, sample_id, solo_str), file=output_file)
                 if has_target:
                     print("T-{}\t{}".format(sample_id, target_str), file=output_file)
 

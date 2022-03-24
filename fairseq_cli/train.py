@@ -23,6 +23,7 @@ from fairseq import (
     tasks,
     utils,
 )
+import re
 from fairseq.data import iterators
 from fairseq.data.plasma_utils import PlasmaStore
 from fairseq.dataclass.configs import FairseqConfig
@@ -82,6 +83,8 @@ def main(cfg: FairseqConfig) -> None:
     task = tasks.setup_task(cfg.task)
 
     assert cfg.criterion, "Please specify criterion to train a model"
+    
+    print(cfg.criterion)
 
     # Build model and criterion
     if cfg.distributed_training.ddp_backend == "fully_sharded":
@@ -272,11 +275,24 @@ def train(
     should_stop = False
     num_updates = trainer.get_num_updates()
     logger.info("Start iterating over samples")
+    
+    def decode_print(toks, flag, dic):
+    	s = dic.string(toks.int().cpu(), task.cfg.eval_bleu_remove_bpe, unk_string="UNKNOWNTOKEN")
+    	s = task.tokenizer.decode(s) if task.tokenizer else s
+    	logging.info(str(flag) + ": " + re.sub("@@ ", "", str(s)))
+
+    
     for i, samples in enumerate(progress):
         with metrics.aggregate("train_inner"), torch.autograd.profiler.record_function(
             "train_step-%d" % i
         ):
             log_output = trainer.train_step(samples)
+            
+        if True:
+            logging.info(type(samples[0]))
+            decode_print(samples[0]["net_input"]["src_tokens"][0], ">>>> (S) ", task.src_dict)
+            decode_print(samples[0]["target"][0], ">>>> (T) ", task.tgt_dict)
+            
 
         if log_output is not None:  # not OOM, overflow, ...
             # log mid-epoch stats
