@@ -169,7 +169,7 @@ class FairseqTask(object):
         return self.datasets[split]
 
     def filter_indices_by_size(
-        self, indices, dataset, max_positions=None, ignore_invalid_inputs=False
+        self, indices, dataset, max_positions=None, ignore_invalid_inputs=False, **kwargs
     ):
         """
         Filter examples that are too large
@@ -184,7 +184,7 @@ class FairseqTask(object):
         Returns:
             np.array: array of filtered sample indices
         """
-        indices, ignored = dataset.filter_indices_by_size(indices, max_positions)
+        indices, ignored = dataset.filter_indices_by_size(indices, max_positions, **kwargs)
         if len(ignored) > 0:
             if not ignore_invalid_inputs:
                 raise Exception(

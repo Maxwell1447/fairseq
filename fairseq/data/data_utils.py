@@ -69,10 +69,13 @@ def collate_tokens_list(
 
     for i, v in enumerate(values):
         for kk in range(k):
-            copy_tensor(v[kk], res[i][kk][size - len(v[kk]) :] if left_pad else res[i][kk][: len(v[kk])])
+            copy_tensor(
+                v[kk],
+                res[i][kk][size - len(v[kk]) :]
+                if left_pad
+                else res[i][kk][: len(v[kk])],
+            )
     return res
-
-
 
 
 def collate_tokens(
@@ -320,7 +323,14 @@ def filter_paired_dataset_indices_by_size(src_sizes, tgt_sizes, indices, max_siz
     return indices, ignored.tolist()
 
 
-def filter_multi_source_dataset_indices_by_size(src_sizes, multi_src_sizes, tgt_sizes, indices, max_sizes):
+def filter_multi_source_dataset_indices_by_size(
+    src_sizes,
+    multi_src_sizes,
+    tgt_sizes,
+    indices,
+    max_sizes,
+    max_acceptable_retrieved_ratio,
+):
     """Filter a list of sample indices. Remove those that are longer
         than specified in max_sizes.
 
@@ -338,17 +348,25 @@ def filter_multi_source_dataset_indices_by_size(src_sizes, multi_src_sizes, tgt_
         return indices, []
     if type(max_sizes) in (int, float):
         max_src_size, max_tgt_size = max_sizes, max_sizes
+        max_multi_src_size = max_sizes
     elif len(max_sizes) == 2:
         max_src_size, max_tgt_size = max_sizes
+        max_multi_src_size = max_tgt_size
     else:
         max_src_size, max_multi_src_size, max_tgt_size = max_sizes
-    mask = (src_sizes[indices] > max_src_size)
+    mask = src_sizes[indices] > max_src_size
     if tgt_sizes is not None:
         ignored = indices[src_sizes[indices] > max_src_size]
         mask = mask | (tgt_sizes[indices] > max_tgt_size)
     if max_multi_src_size is not None:
-        for max_single_src_size in max_multi_src_size:
-            mask = mask | (max_single_src_size[indices] > max_tgt_size)
+        for single_src_size in multi_src_sizes:
+            mask = mask | (single_src_size[indices] > max_multi_src_size)
+
+    for single_src_size in multi_src_sizes:
+        mask = mask | (
+            single_src_size[indices]
+            > max_acceptable_retrieved_ratio * tgt_sizes[indices]
+        )
 
     ignored = indices[mask]
 
@@ -356,10 +374,7 @@ def filter_multi_source_dataset_indices_by_size(src_sizes, multi_src_sizes, tgt_
         if tgt_sizes is None:
             indices = indices[src_sizes[indices] <= max_src_size]
         else:
-            indices = indices[
-                (src_sizes[indices] <= max_src_size)
-                & (tgt_sizes[indices] <= max_tgt_size)
-            ]
+            indices = indices[~mask]
     return indices, ignored.tolist()
 
 
@@ -409,9 +424,7 @@ def batch_by_size(
         )
 
     # added int() to avoid TypeError: an integer is required
-    max_tokens = (
-        int(max_tokens) if max_tokens is not None else -1
-    )
+    max_tokens = int(max_tokens) if max_tokens is not None else -1
     max_sentences = max_sentences if max_sentences is not None else -1
     bsz_mult = required_batch_size_multiple
 
@@ -424,19 +437,11 @@ def batch_by_size(
     if fixed_shapes is None:
         if num_tokens_vec is None:
             return batch_by_size_fn(
-                indices,
-                num_tokens_fn,
-                max_tokens,
-                max_sentences,
-                bsz_mult,
+                indices, num_tokens_fn, max_tokens, max_sentences, bsz_mult,
             )
         else:
             return batch_by_size_vec(
-                indices,
-                num_tokens_vec,
-                max_tokens,
-                max_sentences,
-                bsz_mult,
+                indices, num_tokens_vec, max_tokens, max_sentences, bsz_mult,
             )
 
     else:
@@ -626,9 +631,7 @@ def lengths_to_mask(lens):
 def get_buckets(sizes, num_buckets):
     buckets = np.unique(
         np.percentile(
-            sizes,
-            np.linspace(0, 100, num_buckets + 1),
-            interpolation='lower',
+            sizes, np.linspace(0, 100, num_buckets + 1), interpolation="lower",
         )[1:]
     )
     return buckets

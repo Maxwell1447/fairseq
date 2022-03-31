@@ -32,16 +32,21 @@ logger = logging.getLogger(__name__)
 
 NOISE_CHOICES = ChoiceEnum(["random_delete", "random_mask", "no_noise"])
 
+
 @dataclass
 class TranslationMultiLevenshteinConfig(TranslationConfig):
     noise: NOISE_CHOICES = field(
-        default="random_delete",
-        metadata={
-            "help": "type of noise"
-        },
+        default="random_delete", metadata={"help": "type of noise"},
     )
     num_retrieved: int = field(
-        default=1, metadata={"help": "number of co-edited sequences from the monoling corpus"}
+        default=1,
+        metadata={"help": "number of co-edited sequences from the monoling corpus"},
+    )
+    max_acceptable_retrieved_ratio: float = field(
+        default=1.2,
+        metadata={
+            "help": "Maximum authorized ratio between retrieved examples and target"
+        },
     )
 
 
@@ -97,10 +102,14 @@ def load_lang_multi_dataset(
                 )
 
         for n in range(num_multi_src):
-            dir1 = split_exists(split_k, src, tgt, tgt+str(n+1), data_path)
-            dir2 = split_exists(split_k, tgt, src, tgt+str(n+1), data_path)
+            dir1 = split_exists(split_k, src, tgt, tgt + str(n + 1), data_path)
+            dir2 = split_exists(split_k, tgt, src, tgt + str(n + 1), data_path)
             if not (dir1 or dir2):
-                raise FileNotFoundError("Retrieval dataset #{} not found: {} ({})".format(n+1, split, data_path))
+                raise FileNotFoundError(
+                    "Retrieval dataset #{} not found: {} ({})".format(
+                        n + 1, split, data_path
+                    )
+                )
 
         src_dataset = data_utils.load_indexed_dataset(
             prefix + src, src_dict, dataset_impl
@@ -123,7 +132,7 @@ def load_lang_multi_dataset(
 
         for n in range(num_multi_src):
             single_src_dataset = data_utils.load_indexed_dataset(
-                prefix + tgt + str(n+1), tgt_dict, dataset_impl
+                prefix + tgt + str(n + 1), tgt_dict, dataset_impl
             )
             if single_src_dataset is not None:
                 multi_src_datasets[n].append(single_src_dataset)
@@ -143,7 +152,9 @@ def load_lang_multi_dataset(
         src_dataset = src_datasets[0]
         tgt_dataset = tgt_datasets[0] if len(tgt_datasets) > 0 else None
         for n in range(num_multi_src):
-            multi_src_datasets[n] = multi_src_datasets[n][0] if len(multi_src_datasets[n]) > 0 else None
+            multi_src_datasets[n] = (
+                multi_src_datasets[n][0] if len(multi_src_datasets[n]) > 0 else None
+            )
     else:
         sample_ratios = [1] * len(src_datasets)
         sample_ratios[0] = upsample_primary
@@ -163,7 +174,9 @@ def load_lang_multi_dataset(
         if multi_src_datasets is not None:
             for n in range(num_multi_src):
                 if multi_src_datasets[n] is not None:
-                    multi_src_datasets[n] = PrependTokenDataset(multi_src_datasets[n], tgt_dict.bos())
+                    multi_src_datasets[n] = PrependTokenDataset(
+                        multi_src_datasets[n], tgt_dict.bos()
+                    )
 
     elif prepend_bos_src is not None:
         logger.info(f"prepending src bos: {prepend_bos_src}")
@@ -181,7 +194,9 @@ def load_lang_multi_dataset(
         if multi_src_datasets is not None:
             for n in range(num_multi_src):
                 if multi_src_datasets[n] is not None:
-                    multi_src_datasets[n] = AppendTokenDataset(multi_src_datasets[n], tgt_dict.index("[{}]".format(tgt)))
+                    multi_src_datasets[n] = AppendTokenDataset(
+                        multi_src_datasets[n], tgt_dict.index("[{}]".format(tgt))
+                    )
         eos = tgt_dict.index("[{}]".format(tgt))
 
     align_dataset = None
@@ -193,7 +208,9 @@ def load_lang_multi_dataset(
             )
 
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
-    multi_src_sizes = [single.sizes if single is not None else None for single in multi_src_datasets]
+    multi_src_sizes = [
+        single.sizes if single is not None else None for single in multi_src_datasets
+    ]
     return LanguageMultiSourceDataset(
         src_dataset,
         src_dataset.sizes,
@@ -222,15 +239,16 @@ class TranslationMultiLevenshteinTask(TranslationTask):
 
     cfg: TranslationMultiLevenshteinConfig
 
-#    @staticmethod
-#    def add_args(parser):
-#        TranslationTask.add_args(parser)
-#        parser.add_argument(
-#            "--num-retrieved",
-#            default=3,
-#            type=int,
-#            help="Number of sentences retrieved, then edited together to form the final sentence",
-#        )
+    #    @staticmethod
+    #    def add_args(parser):
+    #        TranslationTask.add_args(parser)
+    #        parser.add_argument(
+    #            "--num-retrieved",
+    #            default=3,
+    #            type=int,
+    #            help="Number of sentences retrieved, then edited together to form the final sentence",
+    #        )
+    tokenizer = None
 
     def load_dataset(self, split, epoch=1, combine=False, **kwargs):
         """Load a given dataset split.
@@ -333,7 +351,11 @@ class TranslationMultiLevenshteinTask(TranslationTask):
         # filter examples that are too large
         if max_positions is not None:
             indices = self.filter_indices_by_size(
-                indices, dataset, max_positions, ignore_invalid_inputs
+                indices,
+                dataset,
+                max_positions,
+                ignore_invalid_inputs,
+                max_acceptable_retrieved_ratio=self.cfg.max_acceptable_retrieved_ratio,
             )
 
         # create mini-batches with given size constraints
@@ -446,26 +468,37 @@ class TranslationMultiLevenshteinTask(TranslationTask):
     def build_generator(self, models, args, **unused):
         # add models input to match the API for SequenceGenerator
         from fairseq.iterative_refinement_generator import IterativeRefinementGenerator
-#        from fairseq.sequence_generator import SequenceGenerator
+
+        #        from fairseq.sequence_generator import SequenceGenerator
 
         return IterativeRefinementGenerator(
-                self.target_dictionary,
-                beam_size=getattr(args, "decode_with_beam", 1),
-                eos_penalty=getattr(args, "decode_eos_penalty", 0.0),
-                max_ratio=getattr(args, "decode_max_ratio", None),
-                max_iter=1,
+            self.target_dictionary,
+            beam_size=getattr(args, "decode_with_beam", 1),
+            eos_penalty=getattr(args, "decode_eos_penalty", 0.0),
+            max_ratio=getattr(args, "decode_max_ratio", None),
+            max_iter=1,
         )
 
-    def build_dataset_for_inference(self, src_tokens, src_lengths, multi_src_tokens, multi_src_sizes, constraints=None):
+    def build_dataset_for_inference(
+        self,
+        src_tokens,
+        src_lengths,
+        multi_src_tokens,
+        multi_src_sizes,
+        constraints=None,
+    ):
         if constraints is not None:
             # Though see Susanto et al. (ACL 2020): https://www.aclweb.org/anthology/2020.acl-main.325/
             raise NotImplementedError(
                 "Constrained decoding with the translation_lev task is not supported"
             )
         return LanguageMultiSourceDataset(
-            src_tokens, src_lengths, self.source_dictionary,
-            multi_src=multi_src_tokens, multi_src_sizes=multi_src_sizes,
-            append_bos=True
+            src_tokens,
+            src_lengths,
+            self.source_dictionary,
+            multi_src=multi_src_tokens,
+            multi_src_sizes=multi_src_sizes,
+            append_bos=True,
         )
 
     def train_step(
@@ -474,18 +507,51 @@ class TranslationMultiLevenshteinTask(TranslationTask):
         model.train()
         sample["prev_target"] = self.inject_noise(sample["target"])
 
-        print('#################print sample[idxs]#######################')
+        print("#################print sample[idxs]#######################")
+        # print(sample)
+        print(
+            "-----SRC LENS-----",
+            sample["net_input"]["src_tokens"]
+            .ne(self.src_dict.pad())
+            .sum(-1)
+            .cpu()
+            .numpy(),
+        )
+        print(
+            "-----TGT LENS-----",
+            sample["net_input"]["tgt_tokens"]
+            .ne(self.tgt_dict.pad())
+            .sum(-1)
+            .cpu()
+            .numpy(),
+        )
+        print("-----MULTI LENS-----", sample["net_input"]["multi_src_tokens"].shape)
+        for i in range(sample["net_input"]["multi_src_tokens"].size(1)):
+            print(
+                i,
+                sample["net_input"]["multi_src_tokens"][:, i, :]
+                .ne(self.tgt_dict.pad())
+                .sum(-1)
+                .cpu()
+                .numpy(),
+            )
+
         idxs = [0]
         for i in idxs:
-            src = sample['net_input']['src_tokens'][i]
-            tgt = sample['net_input']['tgt_tokens'][i]
+            src = sample["net_input"]["src_tokens"][i]
+            tgt = sample["net_input"]["tgt_tokens"][i]
             msrc = sample["net_input"]["multi_src_tokens"][i]
-            print('src')
+            # print("src", src.ne(self.src_dict.pad()).sum().item(), len(src))
             print(self.src_dict.string(src, None))
-            print('tgt')
+            # print("tgt", src.ne(self.tgt_dict.pad()).sum().item(), len(tgt))
             print(self.tgt_dict.string(tgt, None))
             for n, ssrc in enumerate(msrc):
-                print('multi src ', str(n))
+                # print(
+                #     "multi src ",
+                #     str(n),
+                #     ssrc.ne(self.src_dict.pad()).sum().item(),
+                #     len(ssrc),
+                # )
                 print(self.tgt_dict.string(ssrc, None))
 
         loss, sample_size, logging_output = criterion(model, sample)

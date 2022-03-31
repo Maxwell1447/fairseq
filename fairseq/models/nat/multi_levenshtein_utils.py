@@ -5,37 +5,38 @@
 
 import torch
 from fairseq.utils import new_arange
-import networkx as nx
-import itertools
-import sortednp as snp
-import numpy as np
-import random as rd
+
+# import networkx as nx
+# import itertools
+# import sortednp as snp
+# import numpy as np
+# import random as rd
 from fairseq import libnat2
 
 # -------------- Helper Functions --------------------------------------------------- #
 
 
-def load_libnat():
-    try:
-        from fairseq import libnat_cuda
+# def load_libnat():
+#     try:
+#         from fairseq import libnat_cuda
 
-        return libnat_cuda, True
+#         return libnat_cuda, True
 
-    except ImportError as e:
-        print(str(e) + "... fall back to CPU version")
+#     except ImportError as e:
+#         print(str(e) + "... fall back to CPU version")
 
-        try:
-            from fairseq import libnat
+#         try:
+#             from fairseq import libnat
 
-            return libnat, False
+#             return libnat, False
 
-        except ImportError as e:
-            import sys
+#         except ImportError as e:
+#             import sys
 
-            sys.stderr.write(
-                "ERROR: missing libnat_cuda. run `python setup.py build_ext --inplace`\n"
-            )
-            raise e
+#             sys.stderr.write(
+#                 "ERROR: missing libnat_cuda. run `python setup.py build_ext --inplace`\n"
+#             )
+#             raise e
 
 
 def pi_del(
@@ -77,24 +78,25 @@ def pi_del(
     )
 
     tok_mask = mask.any(1)
-    sorted_mask = mask.sort(-1, descending=True)[0]
+    sorted_ = mask.long().sort(-1, descending=True)
+    sorted_mask = sorted_[0].bool()
     y_plh[sorted_mask] = y_star_n[mask]
     y_cmb[y_star_n.ne(pad_symbol)] = plh_symbol
     y_cmb[mask] = y_star_n[mask]
     y_tok[y_tgt_star.ne(pad_symbol)] = plh_symbol
     y_tok[tok_mask] = y_tgt_star[tok_mask]
 
-    idx = mask.sort(-1, descending=True)[1]
+    idx = sorted_[1]
 
     plh_tgt = idx[:, :, 1:] - idx[:, :, :-1] - 1
     plh_tgt[~sorted_mask[:, :, 1:]] = 0
-    plh_tgt = plh_tgt.clamp(0, Kmax)
+    plh_tgt = plh_tgt.clamp(0, Kmax - 1)
 
     cmb_tgt = mask.long()
 
     plh_mask = y_plh.ne(pad_symbol)[:, :, 1:]
     del_mask = torch.zeros(shape, dtype=bool, device=device)
-    cmb_mask = y_tgt_star.ne(pad_symbol)
+    cmb_mask = y_tgt_star.ne(pad_symbol).view(shape[0], 1, shape[-1]).expand_as(y_cmb)
 
     return {
         "del_tgt": del_tgt,
@@ -174,22 +176,22 @@ def pi_star(
 
     return {
         "del_tgt": ops.get_del().to(device),
-        "plh_tgt": ops.get_ins().clamp(0, Kmax).to(device),
+        "plh_tgt": ops.get_ins().clamp(0, Kmax - 1).to(device),
         "cmb_tgt": ops.get_cmb().to(device),
         "tok_tgt": y_star,
         "del_mask": y_del.ne(pad_symbol),
-        "plh_mask": ops.get_s_ins().ne(pad_symbol).to(device),
+        "plh_mask": ops.get_s_ins().ne(pad_symbol).to(device)[:, :, 1:],
         "cmb_mask": y_star.ne(pad_symbol)
         .view(y_star.size(0), 1, y_star.size(1))
         .expand_as(ops.get_s_ins()),
-        "tok_mask": (ops.get_s_ins().to(device) == plh_symbol),
+        "tok_mask": (ops.get_s_cmb().to(device) == plh_symbol),
         "y_plh": ops.get_s_del().to(device),
         "y_cmb": ops.get_s_ins().to(device),
         "y_tok": ops.get_s_cmb().to(device),
     }
 
 
-def _apply_del(in_tokens, word_del_pred, padding_idx, bos_idx, eos_idx):
+def apply_del(in_tokens, word_del_pred, padding_idx, bos_idx, eos_idx):
     # word_del_pred: B x N x M in {False, True}
     # apply deletion to a tensor
     in_masks = in_tokens.ne(padding_idx)
@@ -208,7 +210,7 @@ def _apply_del(in_tokens, word_del_pred, padding_idx, bos_idx, eos_idx):
     return out_tokens
 
 
-def _apply_plh(in_tokens, plh_pred, padding_idx, unk_idx, eos_idx):
+def apply_plh(in_tokens, plh_pred, padding_idx, unk_idx, eos_idx):
     # plh_pred: B x N x M in {0, 1, ..., K_max - 1}
     in_masks = in_tokens.ne(padding_idx)
     in_lengths = in_masks.sum(2)
@@ -234,11 +236,11 @@ def _apply_plh(in_tokens, plh_pred, padding_idx, unk_idx, eos_idx):
     return out_tokens
 
 
-def _apply_cmb(in_tokens, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx):
+def apply_cmb(in_tokens, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx):
     # combine choice
-    # cmb_pred: B x M x N in [0, 1]
+    # cmb_pred: B x M x N in [0, 1] (float!)
     # in_tokens: B x N x M
-    cmb_pred = cmb_pred.max(-1)[1]
+    cmb_pred = cmb_pred.transpose(1, 2).max(-1)[1]
     in_masks = in_tokens.ne(padding_idx)
     in_cmb_lengths = (in_masks.sum(1) > 0).sum(-1)  # B
 
@@ -267,7 +269,7 @@ def _apply_cmb(in_tokens, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx):
     return out_tokens
 
 
-def _apply_tok(in_tokens, tok_pred, unk_idx):
+def apply_tok(in_tokens, tok_pred, unk_idx):
     tok_masks = in_tokens.eq(unk_idx)
     out_tokens = in_tokens.masked_scatter(tok_masks, tok_pred[tok_masks])
 

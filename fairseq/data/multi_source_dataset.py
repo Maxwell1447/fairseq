@@ -25,7 +25,10 @@ def collate(
 ):
     if len(samples) == 0:
         return {}
-    def merge(key, left_pad, move_eos_to_beginning=False, pad_to_length=None, is_list=False):
+
+    def merge(
+        key, left_pad, move_eos_to_beginning=False, pad_to_length=None, is_list=False
+    ):
         if is_list:
             return data_utils.collate_tokens_list(
                 [s[key] for s in samples],
@@ -86,29 +89,31 @@ def collate(
     src_lengths, sort_order = src_lengths.sort(descending=True)
     id = id.index_select(0, sort_order)
     src_tokens = src_tokens.index_select(0, sort_order)
-    
+
     multi_src_lengths = list()
     multi_src_tokens = list()
     if samples[0].get("multi_source", None) is not None:
-        
+
         multi_src_ = merge(
             "multi_source",
             left_pad=left_pad_target,
             pad_to_length=pad_to_length["target"]
             if pad_to_length is not None
             else None,
-            is_list=True
+            is_list=True,
         )
         multi_src_tokens = multi_src_.index_select(0, sort_order)
         # Warning cause list
         for k in range(len(samples[0]["multi_source"])):
-            multi_src_lengths.append(torch.LongTensor(
-                [s["multi_source"][k].ne(pad_idx).long().sum() for s in samples]
-            ).index_select(0, sort_order))
+            multi_src_lengths.append(
+                torch.LongTensor(
+                    [s["multi_source"][k].ne(pad_idx).long().sum() for s in samples]
+                ).index_select(0, sort_order)
+            )
 
     prev_output_tokens = None
     target = None
-    
+
     if samples[0].get("target", None) is not None:
         target = merge(
             "target",
@@ -143,9 +148,13 @@ def collate(
         "id": id,
         "nsentences": len(samples),
         "ntokens": ntokens,
-        "net_input": {"src_tokens": src_tokens, "src_lengths": src_lengths, 
-                      "multi_src_tokens": multi_src_tokens, "multi_src_lengths": multi_src_lengths,
-                      "target_tokens": target},
+        "net_input": {
+            "src_tokens": src_tokens,
+            "src_lengths": src_lengths,
+            "multi_src_tokens": multi_src_tokens,
+            "multi_src_lengths": multi_src_lengths,
+            "tgt_tokens": target,
+        },
         "target": target,
     }
     if prev_output_tokens is not None:
@@ -268,17 +277,20 @@ class LanguageMultiSourceDataset(FairseqDataset):
             assert multi_src is not None
             for multi_src_single in multi_src:
                 assert len(multi_src_single) == len(
-                tgt
-            ), "multi source ({}) and target ({}) must contain the same number of examples".format(
-                    len(multi_src_single),
-                    len(tgt)
-                             )
+                    tgt
+                ), "multi source ({}) and target ({}) must contain the same number of examples".format(
+                    len(multi_src_single), len(tgt)
+                )
         self.src = src
         self.multi_src = multi_src
         self.tgt = tgt
         self.src_sizes = np.array(src_sizes)
         self.tgt_sizes = np.array(tgt_sizes) if tgt_sizes is not None else None
-        self.multi_src_sizes = [np.array(size_single) for size_single in multi_src_sizes] if multi_src_sizes is not None else None
+        self.multi_src_sizes = (
+            [np.array(size_single) for size_single in multi_src_sizes]
+            if multi_src_sizes is not None
+            else None
+        )
         self.sizes = (
             np.vstack([self.src_sizes] + self.multi_src_sizes + [self.tgt_sizes]).T
             if self.tgt_sizes is not None and self.multi_src_sizes is not None
@@ -334,9 +346,14 @@ class LanguageMultiSourceDataset(FairseqDataset):
                         num_buckets=num_buckets,
                         pad_idx=self.tgt_dict.pad(),
                         left_pad=self.left_pad_target,
-                    ) for single_src, single_size in zip(self.multi_src, self.multi_src_sizes)
+                    )
+                    for single_src, single_size in zip(
+                        self.multi_src, self.multi_src_sizes
+                    )
                 ]
-                self.mutli_src_sizes = [single_src.sizes for single_src in self.multi_src]
+                self.mutli_src_sizes = [
+                    single_src.sizes for single_src in self.multi_src
+                ]
 
             # determine bucket sizes using self.num_tokens, which will return
             # the padded lengths (thanks to BucketPadLengthDataset)
@@ -354,7 +371,11 @@ class LanguageMultiSourceDataset(FairseqDataset):
 
     def __getitem__(self, index):
         tgt_item = self.tgt[index] if self.tgt is not None else None
-        multi_src_item = [single_src[index] for single_src in self.multi_src] if self.multi_src is not None else None
+        multi_src_item = (
+            [single_src[index] for single_src in self.multi_src]
+            if self.multi_src is not None
+            else None
+        )
         src_item = self.src[index]
         # Append EOS to end of tgt sentence if it does not have an EOS and remove
         # EOS from end of src sentence if it exists. This is useful when we use
@@ -373,7 +394,9 @@ class LanguageMultiSourceDataset(FairseqDataset):
             if self.mutli_src:
                 for i, single_src in enumerate(self.mutli_src):
                     if single_src[index][0] != bos:
-                        multi_src_item[i] = torch.cat([torch.LongTensor([bos]), multi_src_item[i]])
+                        multi_src_item[i] = torch.cat(
+                            [torch.LongTensor([bos]), multi_src_item[i]]
+                        )
 
             bos = self.src_dict.bos()
             if self.src[index][0] != bos:
@@ -464,7 +487,9 @@ class LanguageMultiSourceDataset(FairseqDataset):
         return max(
             self.src_sizes[index],
             self.tgt_sizes[index] if self.tgt_sizes is not None else 0,
-            max([single_size[index] for single_size in self.multi_src_sizes]) if self.multi_src_sizes is not None else 0
+            max([single_size[index] for single_size in self.multi_src_sizes])
+            if self.multi_src_sizes is not None
+            else 0,
         )
 
     def num_tokens_vec(self, indices):
@@ -483,7 +508,9 @@ class LanguageMultiSourceDataset(FairseqDataset):
         filtering a dataset with ``--max-positions``."""
         return (
             self.src_sizes[index],
-            [single_size[index] for single_size in self.multi_src_sizes]  if self.tgt_sizes is not None else [],
+            [single_size[index] for single_size in self.multi_src_sizes]
+            if self.tgt_sizes is not None
+            else [],
             self.tgt_sizes[index] if self.tgt_sizes is not None else 0,
         )
 
@@ -495,7 +522,9 @@ class LanguageMultiSourceDataset(FairseqDataset):
         else:
             indices = np.arange(len(self), dtype=np.int64)
         if self.buckets is None:
-            # sort by target length, then source length
+            # sort by multi_source length, then target length, then source length
+            for single_size in self.multi_src_sizes:
+                indices = indices[np.argsort(single_size[indices], kind="mergesort")]
             if self.tgt_sizes is not None:
                 indices = indices[np.argsort(self.tgt_sizes[indices], kind="mergesort")]
             return indices[np.argsort(self.src_sizes[indices], kind="mergesort")]
@@ -522,7 +551,9 @@ class LanguageMultiSourceDataset(FairseqDataset):
         if self.align_dataset is not None:
             self.align_dataset.prefetch(indices)
 
-    def filter_indices_by_size(self, indices, max_sizes):
+    def filter_indices_by_size(
+        self, indices, max_sizes, max_acceptable_retrieved_ratio=None
+    ):
         """Filter a list of sample indices. Remove those that are longer
             than specified in max_sizes.
 
@@ -535,6 +566,15 @@ class LanguageMultiSourceDataset(FairseqDataset):
             np.array: filtered sample array
             list: list of removed indices
         """
+        assert (
+            max_acceptable_retrieved_ratio is not None
+        ), "max_acceptable_retrieved_ratio not defined..."
         return data_utils.filter_multi_source_dataset_indices_by_size(
-            self.src_sizes, self.multi_src_sizes, self.tgt_sizes, indices, max_sizes,
+            self.src_sizes,
+            self.multi_src_sizes,
+            self.tgt_sizes,
+            indices,
+            max_sizes,
+            max_acceptable_retrieved_ratio,
         )
+

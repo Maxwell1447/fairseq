@@ -14,26 +14,29 @@ from fairseq.modules.transformer_sentence_encoder import init_bert_params
 import random as rd
 import numpy as np
 
-from .levenshtein_utils import (
-    _apply_del_words,
-    _apply_ins_masks,
-    _apply_ins_words,
-    _fill,
-    _get_del_targets,
-    _get_ins_targets,
-    _skip,
-    _skip_encoder_out,
-)
+# from .levenshtein_utils import (
+#     _apply_del_words,
+#     _apply_ins_masks,
+#     _apply_ins_words,
+#     _fill,
+#     _get_del_targets,
+#     _get_ins_targets,
+#     _skip,
+#     _skip_encoder_out,
+# )
 
 from .multi_levenshtein_utils import (
     pi_del,
     pi_sel,
     pi_mask,
     pi_star,
-    _apply_del,
-    _apply_plh,
-    _apply_cmb,
-    _apply_tok,
+    apply_del,
+    apply_plh,
+    apply_cmb,
+    apply_tok,
+    _skip,
+    _skip_encoder_out,
+    _fill,
 )
 
 
@@ -143,7 +146,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
 
         return X[:, 0, :], X[:, 1:-1, :], X[:, -1, :]
 
-    def forward(self, x, y_init_star, prev_out_toks, tgt_tokens, **kwargs):
+    def forward(self, x, y_init_star, tgt_tokens, **kwargs):
 
         # encoding
         x, y_init_star, tgt_tokens = self.regularize_shapes(x, y_init_star, tgt_tokens)
@@ -157,7 +160,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         # choose init
         if rd.random() > self.beta:
             y_del = y_init_star
-            #            print("pi star")
+            print("pi star")
             # obtain y_plh_star, y_cmb_star, y_tok_star with k-multi-alignment (pi^*)
             with torch.no_grad():
                 res = pi_star(
@@ -171,7 +174,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
 
         else:
             y_del = y_init_star
-            #            print("pi del")
+            print("pi del")
             with torch.no_grad():
                 res = pi_del(
                     y_init_star.shape,
@@ -211,6 +214,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         )
 
         if rd.random() <= self.delta:
+            print("pi mask")
             y_tok, tok_tgt, tok_mask = pi_mask(
                 y_tok,
                 pad_symbol=self.pad,
@@ -219,11 +223,11 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 eos_symbol=self.eos,
             )
 
-        #        print("encoder out ", encoder_out.keys())
-        #        print("y_del", y_del.shape)
-        #        print("y_plh", y_plh.shape)
-        #        print("y_cmb", y_cmb.shape)
-        #        print("y_tok", y_tok.shape)
+        # print("encoder out ", encoder_out.keys())
+        # print("y_del", y_del.shape)
+        # print("y_plh", y_plh.shape)
+        # print("y_cmb", y_cmb.shape)
+        # print("y_tok", y_tok.shape)
 
         del_out, _ = self.decoder.forward_del(
             normalize=False, prev_output_tokens=y_del, encoder_out=encoder_out,
@@ -243,24 +247,24 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
 
         del_out = F.softmax(del_out, -1)
         plh_out = F.softmax(plh_out, -1)
-        cmb_out = F.softmax(cmb_out, -1)
+        cmb_out = F.softmax(cmb_out, -1).transpose(1, 2)
         tok_out = F.softmax(tok_out, -1)
-        #
-        #        print("#############################")
-        #        print("del_out", del_out.shape)
-        #        print("plh_out", plh_out.shape)
-        #        print("cmb_out", cmb_out.shape)
-        #        print("tok_out", tok_out.shape)
-        #        print()
-        #        print("del_tgt", del_tgt.shape)
-        #        print("plh_tgt", plh_tgt.shape)
-        #        print("cmb_tgt", cmb_tgt.shape)
-        #        print("tok_tgt", tok_tgt.shape)
-        #        print()
-        #        print("del_mask", del_mask.shape)
-        #        print("plh_mask", plh_mask.shape)
-        #        print("cmb_mask", cmb_mask.shape)
-        #        print("tok_mask", tok_mask.shape)
+
+        print("#############################")
+        print("del_out", del_out.shape)
+        print("plh_out", plh_out.shape)
+        print("cmb_out", cmb_out.shape)
+        print("tok_out", tok_out.shape)
+        print()
+        print("del_tgt", del_tgt.shape)
+        print("plh_tgt", plh_tgt.shape)
+        print("cmb_tgt", cmb_tgt.shape)
+        print("tok_tgt", tok_tgt.shape)
+        print()
+        print("del_mask", del_mask.shape)
+        print("plh_mask", plh_mask.shape)
+        print("cmb_mask", cmb_mask.shape)
+        print("tok_mask", tok_mask.shape)
 
         return {
             "plh": {"out": plh_out, "tgt": plh_tgt, "mask": plh_mask, "ls": 0.01,},
@@ -310,7 +314,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 #                print("del_pred mean", del_pred.float().mean(0))
                 print("del_pred expect", res)
 
-            _tokens = _apply_del(
+            _tokens = apply_del(
                 output_tokens[can_del_word], del_pred, self.pad, self.bos, self.eos,
             )
             output_tokens = _fill(output_tokens, can_del_word, _tokens, self.pad)
@@ -346,7 +350,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 print("plh_pred expect", res)
             #                print("plh_pred mean", plh_pred.float().mean(0))
 
-            _tokens = _apply_plh(
+            _tokens = apply_plh(
                 output_tokens[can_plh], plh_pred, self.pad, self.unk, self.eos,
             )
             output_tokens = _fill(output_tokens, can_plh, _tokens, self.pad)
@@ -398,7 +402,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             print("cmb_pred expect", res)
         #            print("cmb_pred mean", cmb_out.max(-1)[1].float().mean(0))
 
-        output_tokens = _apply_cmb(
+        output_tokens = apply_cmb(
             output_tokens, cmb_pred, self.pad, self.bos, self.eos, self.unk,
         )
         if history is not None:
@@ -426,7 +430,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 print("tok_pred expect", res)
             #                print("tok_pred mean", tok_pred.float().mean(0))
 
-            _tokens = _apply_tok(output_tokens[can_tok], tok_pred, self.unk,)
+            _tokens = apply_tok(output_tokens[can_tok], tok_pred, self.unk,)
 
             output_tokens = _fill(output_tokens, can_tok, _tokens, self.pad)
 
@@ -561,7 +565,7 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
             the LevenshteinTransformer decoder has full-attention to all generated tokens
         """
         # prev_output_tokens: batch x N x M
-        if multi_len and len(prev_output_tokens.shape) == 3:
+        if multi_len and len(prev_output_tokens.shape) > 1:
             if self.embed_positions is not None:
                 positions = self.embed_positions(prev_output_tokens)
             else:

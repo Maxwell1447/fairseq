@@ -48,6 +48,7 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
                 if dim is None
                 else x.float().mean(dim).type_as(x)
             )
+
         if masks is not None:
             print("+++++++++++", name)
             print("out", outputs.shape, outputs.device, outputs.dtype)
@@ -106,8 +107,8 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
         tgt_tokens, prev_output_tokens = sample["target"], sample["prev_target"]
         if "multi_src_tokens" in sample["net_input"]:
             multi_src_tokens = sample["net_input"]["multi_src_tokens"]
-#            outputs = model(1,2,3,4,5)
-            outputs = model(src_tokens, multi_src_tokens, prev_output_tokens, tgt_tokens)
+            #            outputs = model(1,2,3,4,5)
+            outputs = model(src_tokens, multi_src_tokens, tgt_tokens)
         else:
             outputs = model(src_tokens, src_lengths, prev_output_tokens, tgt_tokens)
         losses, nll_loss = [], []
