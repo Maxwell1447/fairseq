@@ -127,17 +127,26 @@ def pi_sel(
     # y_cmb_star : B x N x M
     # y_refs : B x N x M
 
+    assert y_cmb_star.shape == y_refs.shape, str(y_cmb_star.shape) + str(y_refs.shape)
+    assert ((y_cmb_star == eos_symbol).sum(-1) == 1).all(), ((y_cmb_star == bos_symbol).sum(-1) == 1).all()
+
     mask = (y_cmb_star == plh_symbol) * (
         torch.rand(y_cmb_star.shape, device=device) < gamma
     )
     y_cmb = y_cmb_star.clone()
     mask_ref_sel = y_refs.ne(pad_symbol) & y_refs.ne(bos_symbol) & y_refs.ne(eos_symbol)
     dividend = mask_ref_sel.sum(-1).unsqueeze(-1).expand(y_refs.shape)  # B x N x M
-    idxs = new_arange(y_refs)
-    idxs = torch.remainder(idxs, dividend) + 1
+    mask_void = (dividend[:, :, 0].ne(0).all(-1))
+    idxs = new_arange(y_refs[mask_void])
+
+    idxs = torch.remainder(idxs, dividend[mask_void]) + 1
     idxs = idxs[:, :, torch.randperm(idxs.size(-1))]
 
-    y_cmb[mask] = torch.gather(y_refs, 2, idxs)[mask]
+    y_cmb[mask_void][mask[mask_void]] = torch.gather(y_refs[mask_void], 2, idxs)[mask[mask_void]]
+    # idxs.cpu()
+    # idxs.max()
+    # idxs.cpu().max()
+    # ddd = idxs.cpu().max().item()
 
     return y_cmb
 
@@ -151,7 +160,6 @@ def pi_mask(
     device="cuda:0",
 ):
     """Mask some tokens with <plh> from the target sequence and learn to predict correct tokens."""
-
     y_tok = y_star.clone()
 
     y_tok[
@@ -172,23 +180,35 @@ def pi_star(
     """Quasi optimal operations and states to edit y_del to y_star"""
     # y_del : B x N x M
     # y_star : B x M
+    if y_del.size(1) == 1:
+        k = 1
     ops = libnat2.MultiLevEditOps(y_del.cpu(), y_star.cpu(), k, pad_symbol, plh_symbol)
+
+    cmb_tgt = ops.get_cmb().to(device)
+    y_tok = ops.get_s_cmb().to(device)
+    
 
     return {
         "del_tgt": ops.get_del().to(device),
         "plh_tgt": ops.get_ins().clamp(0, Kmax - 1).to(device),
-        "cmb_tgt": ops.get_cmb().to(device),
+        "cmb_tgt": cmb_tgt,
         "tok_tgt": y_star,
         "del_mask": y_del.ne(pad_symbol),
-        "plh_mask": ops.get_s_ins().ne(pad_symbol).to(device)[:, :, 1:],
+        "plh_mask": ops.get_s_del().ne(pad_symbol).to(device)[:, :, 1:],
         "cmb_mask": y_star.ne(pad_symbol)
-        .view(y_star.size(0), 1, y_star.size(1))
-        .expand_as(ops.get_s_ins()),
+            .view(y_star.size(0), 1, y_star.size(1))
+            .expand_as(ops.get_s_ins()),
         "tok_mask": (ops.get_s_cmb().to(device) == plh_symbol),
         "y_plh": ops.get_s_del().to(device),
         "y_cmb": ops.get_s_ins().to(device),
-        "y_tok": ops.get_s_cmb().to(device),
+        "y_tok": y_tok,
     }
+
+
+def handle_all_plh_case(cmb_tgt, y_tok, plh_symbol):
+    mask_all_plh = (y_tok == plh_symbol).unsqueeze(1).expand_as(cmb_tgt)
+    cmb_tgt[mask_all_plh] = 1
+    return cmb_tgt
 
 
 def apply_del(in_tokens, word_del_pred, padding_idx, bos_idx, eos_idx):
@@ -212,26 +232,37 @@ def apply_del(in_tokens, word_del_pred, padding_idx, bos_idx, eos_idx):
 
 def apply_plh(in_tokens, plh_pred, padding_idx, unk_idx, eos_idx):
     # plh_pred: B x N x M in {0, 1, ..., K_max - 1}
+    # print("in tokens shape =", in_tokens.shape)
+    # print("plh_pred shape  =", plh_pred.shape )
     in_masks = in_tokens.ne(padding_idx)
     in_lengths = in_masks.sum(2)
+    # print("in toks", in_tokens[1].squeeze().cpu().numpy())
+    # print("plh pred", plh_pred[1].squeeze().cpu().numpy())
 
     # HACK: hacky way to shift all the paddings to eos first.
     in_tokens.masked_fill_(~in_masks, eos_idx)
     plh_pred.masked_fill_(~in_masks[:, :, 1:], 0)
 
     out_lengths = in_lengths + plh_pred.sum(2)  # B x N
+    # print("out_lengths", out_lengths.squeeze().cpu().numpy())
     out_masks = (
-        new_arange(out_lengths, in_tokens.size(2))[None, :] < out_lengths[:, :, None]
+        new_arange(out_lengths, out_lengths.max())[None, :] < out_lengths[:, :, None]
     )
+    # print("out_masks", out_masks.squeeze().cpu().numpy())
 
     reordering = (plh_pred + in_masks[:, :, 1:].long()).cumsum(2)
+    # print("reordering", reordering.squeeze().cpu().numpy())
     out_tokens = (
-        in_tokens.new_zeros(in_tokens.size(0), in_tokens.size(1), in_tokens.size(2))
+        in_tokens.new_zeros(in_tokens.size(0), in_tokens.size(1), out_lengths.max())
         .fill_(padding_idx)
         .masked_fill_(out_masks, unk_idx)
     )
     out_tokens[:, :, 0] = in_tokens[:, :, 0]
-    out_tokens.scatter_(2, reordering, in_tokens[:, :, 1:])
+    # print(out_tokens[:, :, 1:].shape, reordering.shape, in_tokens[:, :, 1:].shape)
+    # print(reordering.max(), out_lengths.max())
+    out_tokens[:, :, :].scatter_(2, reordering, in_tokens[:, :, 1:])
+
+    # print("out toks", out_tokens[1].squeeze().cpu().numpy())
 
     return out_tokens
 
@@ -240,7 +271,7 @@ def apply_cmb(in_tokens, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx):
     # combine choice
     # cmb_pred: B x M x N in [0, 1] (float!)
     # in_tokens: B x N x M
-    cmb_pred = cmb_pred.transpose(1, 2).max(-1)[1]
+    cmb_pred = cmb_pred.max(-1)[1]
     in_masks = in_tokens.ne(padding_idx)
     in_cmb_lengths = (in_masks.sum(1) > 0).sum(-1)  # B
 
@@ -271,6 +302,7 @@ def apply_cmb(in_tokens, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx):
 
 def apply_tok(in_tokens, tok_pred, unk_idx):
     tok_masks = in_tokens.eq(unk_idx)
+    print(tok_pred[tok_masks])
     out_tokens = in_tokens.masked_scatter(tok_masks, tok_pred[tok_masks])
 
     return out_tokens
@@ -317,7 +349,7 @@ def _fill(x, mask, y, padding_idx):
     if x is None:
         return y
     assert x.dim() == y.dim() and mask.size(0) == x.size(0)
-    assert x.dim() == 2 or (x.dim() == 3 and x.size(2) == y.size(2))
+    assert x.dim() == 2 or x.dim() == 3
     n_selected = mask.sum()
     assert n_selected == y.size(0)
 
@@ -338,6 +370,14 @@ def _fill(x, mask, y, padding_idx):
             x[mask, : y.size(1), :] = y
         else:
             x[mask, : y.size(1), :, :] = y
+    elif x.dim() == 3 and (x.size(2) < y.size(2)):
+        dims = [x.size(0), x.size(1), y.size(2) - x.size(2)]
+        x = torch.cat([x, x.new_zeros(*dims).fill_(padding_idx)], 2)
+        x[mask] = y
+    elif x.dim() == 3 and (x.size(2) > y.size(2)):
+        x[mask] = padding_idx
+        x[mask, :, :y.size(2)] = y
+        # raise NotImplementedError("not implemented by myself")
     else:
         x[mask] = y
     return x

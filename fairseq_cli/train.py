@@ -302,12 +302,12 @@ def train(
         ):
             log_output = trainer.train_step(samples)
 
-        if True:
-            logging.info(type(samples[0]))
-            decode_print(
-                samples[0]["net_input"]["src_tokens"][0], ">>>> (S) ", task.src_dict
-            )
-            decode_print(samples[0]["target"][0], ">>>> (T) ", task.tgt_dict)
+        # if True:
+        #     logging.info(type(samples[0]))
+        #     decode_print(
+        #         samples[0]["net_input"]["src_tokens"][0], ">>>> (S) ", task.src_dict
+        #     )
+        #     decode_print(samples[0]["target"][0], ">>>> (T) ", task.tgt_dict)
 
         if log_output is not None:  # not OOM, overflow, ...
             # log mid-epoch stats

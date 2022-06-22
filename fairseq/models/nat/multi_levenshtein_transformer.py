@@ -30,6 +30,7 @@ from .multi_levenshtein_utils import (
     pi_sel,
     pi_mask,
     pi_star,
+    handle_all_plh_case,
     apply_del,
     apply_plh,
     apply_cmb,
@@ -49,6 +50,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         self.gamma = args.selection_noise_prob
         self.delta = args.completion_noise_prob
         self.Kmax = args.plh_max_num_insert
+
+        self.num_iter = 0
 
     @property
     def allow_length_beam(self):
@@ -129,7 +132,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
 
     @classmethod
     def build_decoder(cls, args, tgt_dict, embed_tokens):
-        decoder = MultiLevenshteinTransformerDecoder(args, tgt_dict, embed_tokens)
+        decoder = MultiLevenshteinTransformerDecoder(
+            args, tgt_dict, embed_tokens)
         if getattr(args, "apply_bert_init", False):
             decoder.apply(init_bert_params)
         return decoder
@@ -146,50 +150,103 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
 
         return X[:, 0, :], X[:, 1:-1, :], X[:, -1, :]
 
-    def forward(self, x, y_init_star, tgt_tokens, **kwargs):
+    @staticmethod
+    def get_mask_from_prob(bsz, p):
+        return torch.rand(bsz) > p
+
+    @staticmethod
+    def combine_res(res1, res2, mask):
+        res = dict()
+        for key in res1:
+            shape = [i for i in res1[key].shape]
+            shape[0] += res2[key].size(0)
+            res[key] = res1[key].new_empty(shape)
+            res[key][mask] = res1[key]
+            res[key][~mask] = res2[key]
+        return res
+
+    def forward(self, x, x_lengths, y_init_star, tgt_tokens, **kwargs):
+        mask_good = torch.ones(x.size(0), device=x.device, dtype=x.dtype)
+        for b in range(x.size(0)):
+            toks, tok_counts = tgt_tokens[b].unique(return_counts=True)
+            bad_toks = toks[tok_counts > 12]
+            if len(bad_toks) > 0:
+                for bad_tok in bad_toks:
+                    for y_init_single in y_init_star[b]:
+                        if (y_init_single == bad_tok).sum() > 12:
+                            mask_good[b] = False
+        x, y_init_star, tgt_tokens = x[mask_good], y_init_star[mask_good], tgt_tokens[mask_good]
 
         # encoding
-        x, y_init_star, tgt_tokens = self.regularize_shapes(x, y_init_star, tgt_tokens)
-        #        print()
-        #        print("x", x.shape)
-        #        print("y_init_star", y_init_star.shape)
-        #        print("tgt_tokens", tgt_tokens.shape)
-        #        print()
-        encoder_out = self.encoder(x, **kwargs)
+        x, y_init_star, tgt_tokens = self.regularize_shapes(
+            x, y_init_star, tgt_tokens)
+        encoder_out = self.encoder(x, src_lengths=x_lengths, **kwargs)
 
         # choose init
-        if rd.random() > self.beta:
-            y_del = y_init_star
-            print("pi star")
-            # obtain y_plh_star, y_cmb_star, y_tok_star with k-multi-alignment (pi^*)
-            with torch.no_grad():
-                res = pi_star(
-                    y_init_star,
-                    tgt_tokens,
-                    pad_symbol=self.pad,
-                    plh_symbol=self.unk,
-                    Kmax=self.Kmax,
-                    device=x.device,
-                )
+        mask_star = self.get_mask_from_prob(y_init_star.size(0), self.beta)
+        y_del = y_init_star
+        with torch.no_grad():
+            # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+            #     f.write("\n[")
+            res_star = pi_star(
+                y_init_star[mask_star],
+                tgt_tokens[mask_star],
+                pad_symbol=self.pad,
+                plh_symbol=self.unk,
+                Kmax=self.Kmax,
+                device=x.device,
+            )
+            # print(res_star["tok_tgt"][res_star["tok_mask"]].tolist())
+            # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+            #     f.write("]")
 
-        else:
-            y_del = y_init_star
-            print("pi del")
-            with torch.no_grad():
-                res = pi_del(
-                    y_init_star.shape,
-                    tgt_tokens,
-                    pad_symbol=self.pad,
-                    plh_symbol=self.unk,
-                    bos_symbol=self.bos,
-                    eos_symbol=self.eos,
-                    Kmax=self.Kmax,
-                    device=x.device,
-                )
+            res_del = pi_del(
+                y_init_star[~mask_star].shape,
+                tgt_tokens[~mask_star],
+                pad_symbol=self.pad,
+                plh_symbol=self.unk,
+                bos_symbol=self.bos,
+                eos_symbol=self.eos,
+                Kmax=self.Kmax,
+                device=x.device,
+            )
+            res = self.combine_res(res_star, res_del, mask_star)
+        self.num_iter += 1
+        # with open("/mnt/beegfs/home/bouthors/NLP4NLP/scripts/multi-lev/logs/log.txt", 'a') as file_log:
+        #     file_log.write(">\n")
+        # if False and rd.random() > self.beta:
+        #     y_del = y_init_star
+        #     print("pi star")
+        #     # obtain y_plh_star, y_cmb_star, y_tok_star with k-multi-alignment (pi^*)
+        #     with torch.no_grad():
+        #         res = pi_star(
+        #             y_init_star,
+        #             tgt_tokens,
+        #             pad_symbol=self.pad,
+        #             plh_symbol=self.unk,
+        #             Kmax=self.Kmax,
+        #             device=x.device,
+        #         )
+
+        # else:
+        #     y_del = y_init_star
+        #     print("pi del")
+        #     with torch.no_grad():
+        #         res = pi_del(
+        #             y_init_star.shape,
+        #             tgt_tokens,
+        #             pad_symbol=self.pad,
+        #             plh_symbol=self.unk,
+        #             bos_symbol=self.bos,
+        #             eos_symbol=self.eos,
+        #             Kmax=self.Kmax,
+        #             device=x.device,
+        #         )
 
         y_plh = res["y_plh"]
         y_cmb = res["y_cmb"]
         y_tok = res["y_tok"]
+        # print("PRESENCE OF <PLH>: ", (res["y_tok"] == 3).sum().item())
 
         del_tgt = res["del_tgt"]
         del_mask = res["del_mask"]
@@ -203,6 +260,9 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         tok_tgt = res["tok_tgt"]
         tok_mask = res["tok_mask"]
 
+        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        #     f.write(str(y_cmb) + "\n>>>>>>>")
+
         y_cmb = pi_sel(
             y_cmb,
             y_init_star,
@@ -211,17 +271,38 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             plh_symbol=self.unk,
             bos_symbol=self.bos,
             eos_symbol=self.eos,
+            device=x.device
         )
+        cmb_tgt = handle_all_plh_case(cmb_tgt, y_tok, self.unk)
 
-        if rd.random() <= self.delta:
-            print("pi mask")
-            y_tok, tok_tgt, tok_mask = pi_mask(
-                y_tok,
-                pad_symbol=self.pad,
-                plh_symbol=self.unk,
-                bos_symbol=self.bos,
-                eos_symbol=self.eos,
-            )
+        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        #     f.write("=")
+
+        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        #     f.write(str(x) + "\n")
+
+        mask_mask = self.get_mask_from_prob(y_tok.size(0), self.delta)
+
+        y_tok[~mask_mask], tok_tgt[~mask_mask], tok_mask[~mask_mask] = pi_mask(
+            tok_tgt[~mask_mask],
+            pad_symbol=self.pad,
+            plh_symbol=self.unk,
+            bos_symbol=self.bos,
+            eos_symbol=self.eos,
+            device=x.device
+        )
+        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        #     f.write(")))\n")
+
+        # if rd.random() <= self.delta:
+        #     print("pi mask")
+        #     y_tok, tok_tgt, tok_mask = pi_mask(
+        #         y_tok,
+        #         pad_symbol=self.pad,
+        #         plh_symbol=self.unk,
+        #         bos_symbol=self.bos,
+        #         eos_symbol=self.eos,
+        #     )
 
         # print("encoder out ", encoder_out.keys())
         # print("y_del", y_del.shape)
@@ -233,6 +314,9 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             normalize=False, prev_output_tokens=y_del, encoder_out=encoder_out,
         )
 
+        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        #     f.write("\n+")
+
         plh_out, _ = self.decoder.forward_plh(
             normalize=False, prev_output_tokens=y_plh, encoder_out=encoder_out,
         )
@@ -240,34 +324,54 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         cmb_out, _ = self.decoder.forward_cmb(
             normalize=False, prev_output_tokens=y_cmb, encoder_out=encoder_out,
         )
+        cmb_out = cmb_out.transpose(1, 2)
 
         tok_out, _ = self.decoder.forward_tok(
             normalize=False, prev_output_tokens=y_tok, encoder_out=encoder_out,
         )
 
-        del_out = F.softmax(del_out, -1)
-        plh_out = F.softmax(plh_out, -1)
-        cmb_out = F.softmax(cmb_out, -1).transpose(1, 2)
-        tok_out = F.softmax(tok_out, -1)
+        with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+            f.write("+")
 
-        print("#############################")
-        print("del_out", del_out.shape)
-        print("plh_out", plh_out.shape)
-        print("cmb_out", cmb_out.shape)
-        print("tok_out", tok_out.shape)
-        print()
-        print("del_tgt", del_tgt.shape)
-        print("plh_tgt", plh_tgt.shape)
-        print("cmb_tgt", cmb_tgt.shape)
-        print("tok_tgt", tok_tgt.shape)
-        print()
-        print("del_mask", del_mask.shape)
-        print("plh_mask", plh_mask.shape)
-        print("cmb_mask", cmb_mask.shape)
-        print("tok_mask", tok_mask.shape)
+        # SOURCE OF MY PROBLEMS??????
+        # del_out = F.softmax(del_out, -1)
+        # plh_out = F.softmax(plh_out, -1)
+        # cmb_out = F.softmax(cmb_out, -1)
+        # tok_out = F.softmax(tok_out, -1)
+
+        # print("#############################")
+        # print("del_out", del_out.shape)
+        # print("plh_out", plh_out.shape)
+        # print("cmb_out", cmb_out.shape)
+        # print("tok_out", tok_out.shape)
+        # print()
+        # print("del_tgt", del_tgt.shape, torch.unique(del_tgt.cpu(), return_counts=True))
+        # print("plh_tgt", plh_tgt.shape, torch.unique(plh_tgt.cpu(), return_counts=True))
+        # print("cmb_tgt", cmb_tgt.shape, torch.unique(cmb_tgt.cpu(), return_counts=True))
+        # print("tok_tgt", tok_tgt.shape)
+        # print()
+        # print("del_mask", del_mask.shape)
+        # print("plh_mask", plh_mask.shape)
+        # print("cmb_mask", cmb_mask.shape)
+        # print("tok_mask", tok_mask.shape)
+        # print("#############################")
+        # # print()
+        # # print("del_tgt", del_tgt[0])
+        # # print("plh_tgt", plh_tgt[0])
+        # # print("cmb_tgt", cmb_tgt[0])
+        # # print("tok_tgt", tok_tgt.shape)
+        # # print()
+        # # print("del_mask", del_mask.shape)
+        # # print("plh_mask", plh_mask.shape)
+        # # print("cmb_mask", cmb_mask.shape)
+        # # print("tok_mask", tok_mask.shape)
+
+        # return {
+        #     "del": {"out": del_out, "tgt": del_tgt, "mask": del_mask,},
+        # }
 
         return {
-            "plh": {"out": plh_out, "tgt": plh_tgt, "mask": plh_mask, "ls": 0.01,},
+            "plh": {"out": plh_out, "tgt": plh_tgt, "mask": plh_mask, "ls": 0.01, },
             "tok": {
                 "out": tok_out,
                 "tgt": tok_tgt,
@@ -275,8 +379,44 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 "ls": self.args.label_smoothing,
                 "nll_loss": True,
             },
-            "del": {"out": del_out, "tgt": del_tgt, "mask": del_mask,},
-            "cmb": {"out": cmb_out, "tgt": cmb_tgt, "mask": cmb_mask},
+            "del": {"out": del_out, "tgt": del_tgt, "mask": del_mask, },
+            "cmb": {"out": cmb_out, "tgt": cmb_tgt, "mask": cmb_mask, },
+        }
+
+    def forward_debug(
+        self, x, y_init_star, src_lengths=None, **kwargs
+    ):
+        with torch.no_grad():
+            # encoding
+            encoder_out = self.encoder(x, src_lengths=src_lengths, **kwargs)
+            # print("encoder out", encoder_out)
+
+            # choose init
+            y_del = y_init_star
+
+            del_out, _ = self.decoder.forward_del(
+                normalize=True,
+                prev_output_tokens=y_del,
+                encoder_out=encoder_out,
+            )
+
+            # plh_out, _ = self.decoder.forward_plh(
+            #     normalize=True, prev_output_tokens=y_plh, encoder_out=encoder_out,
+            # )
+
+            # cmb_out, _ = self.decoder.forward_cmb(
+            #     normalize=True, prev_output_tokens=y_cmb, encoder_out=encoder_out,
+            # )
+
+            # tok_out, _ = self.decoder.forward_tok(
+            #     normalize=True, prev_output_tokens=y_tok, encoder_out=encoder_out,
+            # )
+
+        return {
+            "del_out": del_out,
+            # "plh_out": plh_out,
+            # "cmb_out": cmb_out,
+            # "tok_out": tok_out,
         }
 
     def forward_decoder(
@@ -300,7 +440,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             del_out, _ = self.decoder.forward_del(
                 normalize=True,
                 prev_output_tokens=_skip(output_tokens, can_del_word),
-                encoder_out=_skip_encoder_out(self.encoder, encoder_out, can_del_word),
+                encoder_out=_skip_encoder_out(
+                    self.encoder, encoder_out, can_del_word),
             )
             del_out = F.softmax(del_out, -1)
             del_pred = del_out.max(-1)[1].bool()
@@ -317,7 +458,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             _tokens = apply_del(
                 output_tokens[can_del_word], del_pred, self.pad, self.bos, self.eos,
             )
-            output_tokens = _fill(output_tokens, can_del_word, _tokens, self.pad)
+            output_tokens = _fill(
+                output_tokens, can_del_word, _tokens, self.pad)
 
             if history is not None:
                 history.append(output_tokens.clone())
@@ -328,7 +470,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             plh_out, _ = self.decoder.forward_plh(
                 normalize=True,
                 prev_output_tokens=_skip(output_tokens, can_plh),
-                encoder_out=_skip_encoder_out(self.encoder, encoder_out, can_plh),
+                encoder_out=_skip_encoder_out(
+                    self.encoder, encoder_out, can_plh),
             )
             if eos_penalty > 0.0:
                 plh_out[:, :, :, 0] = plh_out[:, :, :, 0] - eos_penalty
@@ -336,7 +479,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             plh_pred = plh_out.max(-1)[1]
             plh_pred = torch.minimum(
                 plh_pred,
-                torch.tensor(255, device=plh_pred.device, dtype=plh_pred.dtype),
+                torch.tensor(255, device=plh_pred.device,
+                             dtype=plh_pred.dtype),
             )
             if verbose:
                 ranger = (
@@ -357,10 +501,12 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
 
             if history is not None:
                 history.append(output_tokens.clone())
-        cmb_len = (output_tokens == self.eos).long().argsort(-1)[:, :, -1].max(-1)[0]
+        cmb_len = (output_tokens == self.eos).long(
+        ).argsort(-1)[:, :, -1].max(-1)[0]
         mask_inf = (
             (
-                torch.arange(output_tokens.size(-1), device=output_tokens.device)
+                torch.arange(output_tokens.size(-1),
+                             device=output_tokens.device)
                 .view(1, -1)
                 .expand(len(cmb_len), -1)
                 < cmb_len.view(-1, 1).expand(-1, output_tokens.size(-1))
@@ -370,7 +516,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         )
         mask_eq = (
             (
-                torch.arange(output_tokens.size(-1), device=output_tokens.device)
+                torch.arange(output_tokens.size(-1),
+                             device=output_tokens.device)
                 .view(1, -1)
                 .expand(len(cmb_len), -1)
                 == cmb_len.view(-1, 1).expand(-1, output_tokens.size(-1))
@@ -380,7 +527,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         )
         output_tokens[mask_eq] = self.eos
         output_tokens[
-            mask_inf & ((output_tokens == self.eos) | (output_tokens == self.pad))
+            mask_inf & ((output_tokens == self.eos) |
+                        (output_tokens == self.pad))
         ] = self.unk
 
         # merge sequences
@@ -411,36 +559,51 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         # insert tok
         can_tok = output_tokens.eq(self.unk).sum(1) > 0
         if can_tok.sum() != 0:
+            # print("before tok >>>", _skip(output_tokens, can_tok).cpu().numpy().tolist())
             tok_out, _ = self.decoder.forward_tok(
                 normalize=True,
                 prev_output_tokens=_skip(output_tokens, can_tok),
-                encoder_out=_skip_encoder_out(self.encoder, encoder_out, can_tok),
+                encoder_out=_skip_encoder_out(
+                    self.encoder, encoder_out, can_tok),
             )
+            tok_out[:, 3] = tok_out[:, 0] - 10
             _, tok_pred = tok_out.max(-1)
             tok_out = F.softmax(tok_out, -1)
-            if verbose:
-                ranger = (
-                    torch.arange(
-                        tok_pred.size(-1), dtype=tok_pred.dtype, device=tok_pred.device
-                    )
-                    .view(1, 1, 1, -1)
-                    .expand(tok_pred.shape)
-                )
-                res = (ranger * tok_pred).sum(-1).mean(0)
-                print("tok_pred expect", res)
+            # if verbose:
+            #     ranger = (
+            #         torch.arange(
+            #             tok_out.size(-1), dtype=tok_out.dtype, device=tok_out.device
+            #         )
+            #         .view(1, 1, 1, -1)
+            #         .expand(tok_out.shape)
+            #     )
+            #     res = (ranger * tok_pred).sum(-1).mean(0)
+            #     print("tok_pred expect", res)
             #                print("tok_pred mean", tok_pred.float().mean(0))
 
             _tokens = apply_tok(output_tokens[can_tok], tok_pred, self.unk,)
 
             output_tokens = _fill(output_tokens, can_tok, _tokens, self.pad)
 
+            # print("after tok >>>", _skip(output_tokens, can_tok).cpu().numpy().tolist())
+
             if history is not None:
                 history.append(output_tokens.clone())
+        else:
+            print("=== no <unk> to fill????")
         # delete some unnecessary paddings
         cut_off = output_tokens.ne(self.pad).sum(-1).max()
         output_tokens = output_tokens[:, :cut_off]
+        # output_score = decoder_out.output_scores[:, :cut_off]
+        output_scores = torch.zeros_like(
+            output_tokens, dtype=torch.float, device=output_tokens.device)
 
-        return decoder_out._replace(output_tokens=output_tokens, history=history,)
+        return decoder_out._replace(
+            output_tokens=output_tokens,
+            output_scores=output_scores,
+            attn=None if decoder_out.attn is None else decoder_out.attn[:, :cut_off, :],
+            history=history,
+        )
 
     def initialize_output_tokens(self, encoder_out, multi_src_tokens):
 
@@ -483,7 +646,8 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
         self.bos = dictionary.bos()
         self.unk = dictionary.unk()
         self.eos = dictionary.eos()
-        self.sampling_for_deletion = getattr(args, "sampling_for_deletion", False)
+        self.sampling_for_deletion = getattr(
+            args, "sampling_for_deletion", False)
         self.Kmax = args.plh_max_num_insert
         self.embed_plh = Embedding(self.Kmax, self.output_embed_dim * 2, None)
         self.embed_del = Embedding(2, self.output_embed_dim, None)
@@ -518,7 +682,7 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                 ]
             )
         self.layers_cmb = None
-        if getattr(args, "no_share_discriminator", False):
+        if getattr(args, "no_share_maskpredictor", False):
             self.layers_cmb = nn.ModuleList(
                 [
                     TransformerDecoderLayer(args, no_encoder_attn)
@@ -567,7 +731,13 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
         # prev_output_tokens: batch x N x M
         if multi_len and len(prev_output_tokens.shape) > 1:
             if self.embed_positions is not None:
-                positions = self.embed_positions(prev_output_tokens)
+                positions = self.embed_positions(prev_output_tokens[:, 0, :])
+                positions = positions.unsqueeze(1).expand(
+                    (prev_output_tokens.size(0),
+                     prev_output_tokens.size(1),
+                     prev_output_tokens.size(2),
+                     positions.size(-1),)
+                )
             else:
                 positions = None
             seq_emb = self.embed_seq_num(
@@ -575,9 +745,15 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                     prev_output_tokens.size(1), device=prev_output_tokens.device
                 )
             )
-            seq_emb = seq_emb.unsqueeze(0).repeat(prev_output_tokens.size(0), 1, 1)
-            seq_emb = seq_emb.unsqueeze(2).repeat(1, 1, prev_output_tokens.size(2), 1)
+            seq_emb = seq_emb.unsqueeze(0).repeat(
+                prev_output_tokens.size(0), 1, 1)
+            seq_emb = seq_emb.unsqueeze(2).repeat(
+                1, 1, prev_output_tokens.size(2), 1)
             tok_emb = self.embed_scale * self.embed_tokens(prev_output_tokens)
+
+            # print("tok_emb", tok_emb)
+            # print("seq_emb", seq_emb)
+            # print("positions", positions)
 
             # change shape (batch x N x M x p) to (batch x NM x p)
             positions = positions.view(
@@ -683,6 +859,7 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
             **unused
         )
         # features: batch x N x M x d
+        # print("features", features)
         decoder_out = F.linear(features, self.embed_del.weight)
         if normalize:
             return F.log_softmax(decoder_out, -1), extra["attn"]
@@ -699,10 +876,12 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
             **unused
         )
         # features: batch x N x M x d
-        print("features", features.shape)
-        features_cat = torch.cat([features[:, :, :-1, :], features[:, :, 1:, :]], -1)
-        print("features_cat", features_cat.shape)
-        print("self.embed_plh.weight", self.embed_plh.weight.shape)
+        # print("features", features.shape)
+
+        features_cat = torch.cat(
+            [features[:, :, :-1, :], features[:, :, 1:, :]], -1)
+        # print("features_cat", features_cat.shape)
+        # print("self.embed_plh.weight", self.embed_plh.weight.shape)
         decoder_out = F.linear(features_cat, self.embed_plh.weight)
         if normalize:
             return F.log_softmax(decoder_out, -1), extra["attn"]
@@ -756,23 +935,28 @@ def multi_levenshtein_base_architecture(args):
     args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 2048)
     args.encoder_layers = getattr(args, "encoder_layers", 6)
     args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 8)
-    args.encoder_normalize_before = getattr(args, "encoder_normalize_before", False)
+    args.encoder_normalize_before = getattr(
+        args, "encoder_normalize_before", False)
     args.encoder_learned_pos = getattr(args, "encoder_learned_pos", False)
     args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
-    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", args.encoder_embed_dim)
+    args.decoder_embed_dim = getattr(
+        args, "decoder_embed_dim", args.encoder_embed_dim)
     args.decoder_ffn_embed_dim = getattr(
         args, "decoder_ffn_embed_dim", args.encoder_ffn_embed_dim
     )
     args.decoder_layers = getattr(args, "decoder_layers", 6)
     args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 8)
-    args.decoder_normalize_before = getattr(args, "decoder_normalize_before", False)
+    args.decoder_normalize_before = getattr(
+        args, "decoder_normalize_before", False)
     args.decoder_learned_pos = getattr(args, "decoder_learned_pos", False)
     args.attention_dropout = getattr(args, "attention_dropout", 0.0)
     args.activation_dropout = getattr(args, "activation_dropout", 0.0)
     args.activation_fn = getattr(args, "activation_fn", "relu")
     args.dropout = getattr(args, "dropout", 0.1)
-    args.adaptive_softmax_cutoff = getattr(args, "adaptive_softmax_cutoff", None)
-    args.adaptive_softmax_dropout = getattr(args, "adaptive_softmax_dropout", 0)
+    args.adaptive_softmax_cutoff = getattr(
+        args, "adaptive_softmax_cutoff", None)
+    args.adaptive_softmax_dropout = getattr(
+        args, "adaptive_softmax_dropout", 0)
     args.share_decoder_input_output_embed = getattr(
         args, "share_decoder_input_output_embed", False
     )
@@ -787,10 +971,13 @@ def multi_levenshtein_base_architecture(args):
         args, "decoder_output_dim", args.decoder_embed_dim
     )
     args.sampling_for_deletion = getattr(args, "sampling_for_deletion", False)
-    args.decoder_input_dim = getattr(args, "decoder_input_dim", args.decoder_embed_dim)
+    args.decoder_input_dim = getattr(
+        args, "decoder_input_dim", args.decoder_embed_dim)
     args.early_exit = getattr(args, "early_exit", "6,6,6")
-    args.no_share_discriminator = getattr(args, "no_share_discriminator", False)
-    args.no_share_maskpredictor = getattr(args, "no_share_maskpredictor", False)
+    args.no_share_discriminator = getattr(
+        args, "no_share_discriminator", False)
+    args.no_share_maskpredictor = getattr(
+        args, "no_share_maskpredictor", False)
     args.share_discriminator_maskpredictor = getattr(
         args, "share_discriminator_maskpredictor", False
     )
@@ -810,7 +997,8 @@ def multi_levenshtein_transformer_vaswani_wmt_en_de_big(args):
     args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 1024)
     args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 4096)
     args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 16)
-    args.encoder_normalize_before = getattr(args, "encoder_normalize_before", False)
+    args.encoder_normalize_before = getattr(
+        args, "encoder_normalize_before", False)
     args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 1024)
     args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 4096)
     args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 16)
@@ -823,8 +1011,10 @@ def multi_levenshtein_transformer_vaswani_wmt_en_de_big(args):
     "multi_lev_transformer", "multi_levenshtein_transformer_big"
 )
 def multi_levenshtein_transformer_wmt_en_de_big_t2t(args):
-    args.encoder_normalize_before = getattr(args, "encoder_normalize_before", True)
-    args.decoder_normalize_before = getattr(args, "decoder_normalize_before", True)
+    args.encoder_normalize_before = getattr(
+        args, "encoder_normalize_before", True)
+    args.decoder_normalize_before = getattr(
+        args, "decoder_normalize_before", True)
     args.attention_dropout = getattr(args, "attention_dropout", 0.1)
     args.activation_dropout = getattr(args, "activation_dropout", 0.1)
     multi_levenshtein_transformer_vaswani_wmt_en_de_big(args)

@@ -487,7 +487,7 @@ class LanguageMultiSourceDataset(FairseqDataset):
         return max(
             self.src_sizes[index],
             self.tgt_sizes[index] if self.tgt_sizes is not None else 0,
-            max([single_size[index] for single_size in self.multi_src_sizes])
+            sum([single_size[index] for single_size in self.multi_src_sizes])
             if self.multi_src_sizes is not None
             else 0,
         )
@@ -499,8 +499,10 @@ class LanguageMultiSourceDataset(FairseqDataset):
         if self.tgt_sizes is not None:
             sizes = np.maximum(sizes, self.tgt_sizes[indices])
         if self.multi_src_sizes is not None:
+            multi_size = np.zeros_like(sizes)
             for single_size in self.multi_src_sizes:
-                sizes = np.maximum(sizes, single_size[indices])
+                multi_size = multi_size + single_size[indices]
+            sizes = np.maximum(sizes, multi_size)
         return sizes
 
     def size(self, index):
@@ -569,7 +571,7 @@ class LanguageMultiSourceDataset(FairseqDataset):
         assert (
             max_acceptable_retrieved_ratio is not None
         ), "max_acceptable_retrieved_ratio not defined..."
-        return data_utils.filter_multi_source_dataset_indices_by_size(
+        indices, ignored = data_utils.filter_multi_source_dataset_indices_by_size(
             self.src_sizes,
             self.multi_src_sizes,
             self.tgt_sizes,
@@ -577,4 +579,6 @@ class LanguageMultiSourceDataset(FairseqDataset):
             max_sizes,
             max_acceptable_retrieved_ratio,
         )
+
+        return indices, ignored
 

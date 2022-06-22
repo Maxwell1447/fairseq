@@ -196,6 +196,9 @@ class CommonConfig(FairseqDataclass):
             "help": "path to run plasma_store, defaults to /tmp/plasma. Paths outside /tmp tend to fail."
         },
     )
+    cumul_grad: int = field(
+        default=0, metadata={"help": "cumulate gradient and update every N iterations."}
+    )
 
 
 @dataclass

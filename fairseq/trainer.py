@@ -638,7 +638,22 @@ class Trainer(object):
 
         # forward and backward pass
         logging_outputs, sample_size, ooms = [], 0, 0
+        # if self.get_num_updates() != 2081:
+        #     with open("/mnt/beegfs/home/bouthors/NLP4NLP/scripts/multi-lev/logs/log2.txt", 'a') as file_log:
+        #         file_log.write(str(self.get_num_updates()) 
+        #         + "\n")
+        #     self.set_num_updates(self.get_num_updates() + 1)
+        #     return logging_outputs
         for i, sample in enumerate(samples):  # delayed update loop
+            # with open("/mnt/beegfs/home/bouthors/NLP4NLP/scripts/multi-lev/logs/log2.txt", 'a') as file_log:
+            #     file_log.write(str(self.get_num_updates()) 
+            #     + "\n")
+            #     if self.get_num_updates() == 2081:
+            #         file_log.write(
+            #             "\n" +
+            #             " ".join(map(str, list(sample["id"].cpu().numpy()))) 
+            #             + "\n"
+            #         )
             sample, is_dummy_batch = self._prepare_sample(sample)
 
             def maybe_no_sync():

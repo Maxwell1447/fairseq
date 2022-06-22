@@ -76,7 +76,6 @@ class IterativeRefinementGenerator(object):
             cuda: use GPU for generation
             timer: StopwatchMeter for timing generations.
         """
-
         for sample in data_itr:
             if "net_input" not in sample:
                 continue
@@ -217,6 +216,7 @@ class IterativeRefinementGenerator(object):
             decoder_out = model.forward_decoder(
                 prev_decoder_out, encoder_out, **decoder_options
             )
+            assert decoder_out.output_tokens.shape == decoder_out.output_scores.shape
 
             if self.adaptive and not "multi_src_tokens" in sample["net_input"]:
                 # terminate if there is a loop
@@ -231,6 +231,7 @@ class IterativeRefinementGenerator(object):
                     output_scores=out_scores,
                     attn=out_attn,
                 )
+                assert decoder_out.output_tokens.shape == decoder_out.output_scores.shape
 
             else:
                 terminated = decoder_out.output_tokens.new_zeros(

@@ -210,7 +210,7 @@ class TranslationConfig(FairseqDataclass):
         default=1024, metadata={"help": "max number of tokens in the target sequence"}
     )
     upsample_primary: int = field(
-        default=-1, metadata={"help": "the amount of upsample primary dataset"}
+        default=1, metadata={"help": "the amount of upsample primary dataset"}
     )
     truncate_source: bool = field(
         default=False, metadata={"help": "truncate source to max-source-positions"}
@@ -429,8 +429,8 @@ class TranslationTask(FairseqTask):
                     bleu = BLEU.compute_bleu(
                         correct=meters["_bleu_counts"].sum,
                         total=meters["_bleu_totals"].sum,
-                        sys_len=meters["_bleu_sys_len"].sum,
-                        ref_len=meters["_bleu_ref_len"].sum,
+                        sys_len=int(meters["_bleu_sys_len"].sum),
+                        ref_len=int(meters["_bleu_ref_len"].sum),
                         **smooth
                     )
                     return round(bleu.score, 2)
