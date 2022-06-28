@@ -14,16 +14,16 @@ from fairseq.modules.transformer_sentence_encoder import init_bert_params
 import random as rd
 import numpy as np
 
-# from .levenshtein_utils import (
-#     _apply_del_words,
-#     _apply_ins_masks,
-#     _apply_ins_words,
-#     _fill,
-#     _get_del_targets,
-#     _get_ins_targets,
-#     _skip,
-#     _skip_encoder_out,
-# )
+from .levenshtein_utils import (
+    _apply_del_words,
+    _apply_ins_masks,
+    _apply_ins_words,
+    _fill,
+    _get_del_targets,
+    _get_ins_targets,
+    _skip,
+    _skip_encoder_out,
+)
 
 from .multi_levenshtein_utils import (
     pi_del,
@@ -35,9 +35,9 @@ from .multi_levenshtein_utils import (
     apply_plh,
     apply_cmb,
     apply_tok,
-    _skip,
-    _skip_encoder_out,
-    _fill,
+    # _skip,
+    # _skip_encoder_out,
+    # _fill,
 )
 
 
@@ -60,12 +60,6 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
     @staticmethod
     def add_args(parser):
         FairseqNATModel.add_args(parser)
-        parser.add_argument(
-            "--match-suggestion-number",
-            default=3,
-            type=int,
-            help="number of matching propositions to be edited",
-        )
         parser.add_argument(
             "--early-exit",
             default="6,6,6,6",
@@ -98,12 +92,12 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             type=float,
             help="probability to train from noised target instead of the retrieved sequence",
         )
-        #        parser.add_argument(
-        #            "--correction-prob",
-        #            default=0.2,
-        #            type=float,
-        #            help="probability to train to correct errors instead",
-        #        )
+        parser.add_argument(
+            "--correction-prob",
+            default=0.2,
+            type=float,
+            help="probability to train to correct errors instead",
+        )
         parser.add_argument(
             "--selection-noise-prob",
             default=0.2,
@@ -123,12 +117,12 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             help="Number of placeholders that can be added between 2 consecutive tokens",
         )
 
-    #        parser.add_argument(
-    #            "--num-retrieved",
-    #            default=3,
-    #            type=int,
-    #            help="Number of sentences retrieved, then edited together to form the final sentence",
-    #        )
+        parser.add_argument(
+            "--num-retrieved",
+            default=1,
+            type=int,
+            help="Number of sentences retrieved, then edited together to form the final sentence",
+        )
 
     @classmethod
     def build_decoder(cls, args, tgt_dict, embed_tokens):
@@ -165,445 +159,611 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             res[key][~mask] = res2[key]
         return res
 
-    def forward(self, x, x_lengths, y_init_star, tgt_tokens, **kwargs):
-        mask_good = torch.ones(x.size(0), device=x.device, dtype=x.dtype)
-        for b in range(x.size(0)):
-            toks, tok_counts = tgt_tokens[b].unique(return_counts=True)
-            bad_toks = toks[tok_counts > 12]
-            if len(bad_toks) > 0:
-                for bad_tok in bad_toks:
-                    for y_init_single in y_init_star[b]:
-                        if (y_init_single == bad_tok).sum() > 12:
-                            mask_good[b] = False
-        x, y_init_star, tgt_tokens = x[mask_good], y_init_star[mask_good], tgt_tokens[mask_good]
+    def forward(self, src_tokens, src_lengths, prev_output_tokens, tgt_tokens, **kwargs):
+        src_tokens, prev_output_tokens, tgt_tokens = self.regularize_shapes(
+            src_tokens, prev_output_tokens, tgt_tokens
+        )
+        mask_good = torch.ones(src_tokens.size(0), device=src_tokens.device, dtype=src_tokens.dtype)
+        threshold = src_tokens.size(1) / 3 + 10
+        if threshold < src_tokens.size(1):
+            for b in range(src_tokens.size(0)):
+                toks, tok_counts = tgt_tokens[b].unique(return_counts=True)
+                bad_toks = toks[tok_counts > threshold]
+                if len(bad_toks) > 0:
+                    for bad_tok in bad_toks:
+                        for prev_output_tokens_single in prev_output_tokens[b]:
+                            if (prev_output_tokens_single == bad_tok).sum() > threshold:
+                                mask_good[b] = False
+        print("mask good", mask_good.cpu().tolist())
+        # src_tokens_good, prev_output_tokens_good, tgt_tokens_good = src_tokens[mask_good], prev_output_tokens[mask_good], tgt_tokens[mask_good]
+        # src_tokens_bad, prev_output_tokens_bad, tgt_tokens_bad = src_tokens[~mask_good], prev_output_tokens[~mask_good], tgt_tokens[~mask_good]
 
         # encoding
-        x, y_init_star, tgt_tokens = self.regularize_shapes(
-            x, y_init_star, tgt_tokens)
-        encoder_out = self.encoder(x, src_lengths=x_lengths, **kwargs)
-
+        encoder_out = self.encoder(src_tokens, src_lengths=src_lengths, **kwargs)
+        
+        del_tgt = None
+        del_mask = None
         # choose init
-        mask_star = self.get_mask_from_prob(y_init_star.size(0), self.beta)
-        y_del = y_init_star
+        # mask_star = self.get_mask_from_prob(prev_output_tokens.size(0), self.beta)
         with torch.no_grad():
-            # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
-            #     f.write("\n[")
             res_star = pi_star(
-                y_init_star[mask_star],
-                tgt_tokens[mask_star],
+                prev_output_tokens[mask_good],
+                tgt_tokens[mask_good],
                 pad_symbol=self.pad,
                 plh_symbol=self.unk,
                 Kmax=self.Kmax,
-                device=x.device,
+                device=src_tokens.device,
             )
+            del_tgt = 1 - res_star["del_tgt"]
+            del_mask = res_star["del_mask"]
+            del_tgt[~del_mask] = 0
+            del_tgt_bad = list()
+            del_mask_bad = list()
+            for n in range(prev_output_tokens.size(1)):
+                del_tgt_bad.append(_get_del_targets(
+                    prev_output_tokens[~mask_good][:, n], 
+                    tgt_tokens[~mask_good], 
+                    self.pad
+                ).unsqueeze(1))
+                del_mask_bad.append(prev_output_tokens[~mask_good][:, n].ne(self.pad).unsqueeze(1))
+            del_tgt_bad = torch.cat(del_tgt_bad, dim=1)
+            del_mask_bad = torch.cat(del_mask_bad, dim=1)
+            
+            res = self.combine_res(
+                {"del_tgt": del_tgt, "del_mask": del_mask},
+                {"del_tgt": del_tgt_bad, "del_mask": del_mask_bad},
+                mask_good
+            )
+            del_tgt = res["del_tgt"]
+            del_mask = res["del_mask"]
             # print(res_star["tok_tgt"][res_star["tok_mask"]].tolist())
-            # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
-            #     f.write("]")
+            # res_del = pi_del(
+            #     y_init_star[~mask_star].shape,
+            #     tgt_tokens[~mask_star],
+            #     pad_symbol=self.pad,
+            #     plh_symbol=self.unk,
+            #     bos_symbol=self.bos,
+            #     eos_symbol=self.eos,
+            #     Kmax=self.Kmax,
+            #     device=x.device,
+            # )
 
-            res_del = pi_del(
-                y_init_star[~mask_star].shape,
-                tgt_tokens[~mask_star],
-                pad_symbol=self.pad,
-                plh_symbol=self.unk,
-                bos_symbol=self.bos,
-                eos_symbol=self.eos,
-                Kmax=self.Kmax,
-                device=x.device,
-            )
-            res = self.combine_res(res_star, res_del, mask_star)
-        self.num_iter += 1
-        # with open("/mnt/beegfs/home/bouthors/NLP4NLP/scripts/multi-lev/logs/log.txt", 'a') as file_log:
-        #     file_log.write(">\n")
-        # if False and rd.random() > self.beta:
-        #     y_del = y_init_star
-        #     print("pi star")
-        #     # obtain y_plh_star, y_cmb_star, y_tok_star with k-multi-alignment (pi^*)
-        #     with torch.no_grad():
-        #         res = pi_star(
-        #             y_init_star,
-        #             tgt_tokens,
-        #             pad_symbol=self.pad,
-        #             plh_symbol=self.unk,
-        #             Kmax=self.Kmax,
-        #             device=x.device,
-        #         )
-
-        # else:
-        #     y_del = y_init_star
-        #     print("pi del")
-        #     with torch.no_grad():
-        #         res = pi_del(
-        #             y_init_star.shape,
-        #             tgt_tokens,
-        #             pad_symbol=self.pad,
-        #             plh_symbol=self.unk,
-        #             bos_symbol=self.bos,
-        #             eos_symbol=self.eos,
-        #             Kmax=self.Kmax,
-        #             device=x.device,
-        #         )
-
-        y_plh = res["y_plh"]
-        y_cmb = res["y_cmb"]
-        y_tok = res["y_tok"]
-        # print("PRESENCE OF <PLH>: ", (res["y_tok"] == 3).sum().item())
-
-        del_tgt = res["del_tgt"]
-        del_mask = res["del_mask"]
-
-        plh_tgt = res["plh_tgt"]
-        plh_mask = res["plh_mask"]
-
-        cmb_tgt = res["cmb_tgt"]
-        cmb_mask = res["cmb_mask"]
-
-        tok_tgt = res["tok_tgt"]
-        tok_mask = res["tok_mask"]
-
-        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
-        #     f.write(str(y_cmb) + "\n>>>>>>>")
-
-        y_cmb = pi_sel(
-            y_cmb,
-            y_init_star,
-            self.gamma,
-            pad_symbol=self.pad,
-            plh_symbol=self.unk,
-            bos_symbol=self.bos,
-            eos_symbol=self.eos,
-            device=x.device
+        del_out, _ = self.decoder.forward_del(
+            normalize=False, prev_output_tokens=prev_output_tokens, encoder_out=encoder_out,
         )
-        cmb_tgt = handle_all_plh_case(cmb_tgt, y_tok, self.unk)
+        # if len(del_out.shape) == 3:
+        #     del_out = del_out.unsqueeze(1)
+        # prev_word_del_targets = _get_del_targets(
+        #     prev_output_tokens, tgt_tokens, self.pad
+        # )
+        # if len(del_out.shape) == 4:
+        #     prev_word_del_out = del_out[:, 0]
 
-        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
-        #     f.write("=")
+        if len(prev_output_tokens.shape) == 3:
+            prev_output_tokens = prev_output_tokens[:, 0]
+        # del_out, _ = self.decoder.forward_word_del(
+        #     normalize=False, prev_output_tokens=prev_output_tokens, encoder_out=encoder_out,
+        # )
+        prev_word_del_out = del_out[:, 0]
+        del_tgt = _get_del_targets(prev_output_tokens, tgt_tokens, self.pad)
+        del_mask = prev_output_tokens.ne(self.pad)
+        # prev_word_del_masks = prev_output_tokens.ne(self.pad)
+        prev_word_del_targets = del_tgt
+        
 
-        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
-        #     f.write(str(x) + "\n")
+        ############################ prev del levt
+        # generate training labels for deletion
 
-        mask_mask = self.get_mask_from_prob(y_tok.size(0), self.delta)
+        
+        # print("#### del tgt mlevt", del_tgt[:2].cpu().tolist())
+        # print("#### del tgt levt ", prev_word_del_targets[:2].cpu().tolist())
+        # print()
 
-        y_tok[~mask_mask], tok_tgt[~mask_mask], tok_mask[~mask_mask] = pi_mask(
-            tok_tgt[~mask_mask],
-            pad_symbol=self.pad,
-            plh_symbol=self.unk,
-            bos_symbol=self.bos,
-            eos_symbol=self.eos,
-            device=x.device
+        # delete tokens
+        prev_output_tokens, _, _ = _apply_del_words(
+            prev_output_tokens,
+            in_scores=None,
+            in_attn=None,
+            word_del_pred=prev_word_del_targets.bool() |
+            prev_word_del_out.max(-1)[1].bool(),
+            padding_idx=self.pad,
+            bos_idx=self.bos,
+            eos_idx=self.eos,
         )
-        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
-        #     f.write(")))\n")
+        # delete unnecessary paddings
+        cut_off = prev_output_tokens.ne(self.pad).sum(1).max()
+        prev_output_tokens = prev_output_tokens[:, :cut_off]
+        ############################ ins levt
+        masked_tgt_masks, masked_tgt_tokens, mask_ins_targets = _get_ins_targets(
+            prev_output_tokens, tgt_tokens, self.pad, self.unk
+        )
+        mask_ins_targets = mask_ins_targets.clamp(min=0, max=63)  # for safe prediction
+        mask_ins_masks = prev_output_tokens[:, 1:].ne(self.pad)
 
-        # if rd.random() <= self.delta:
-        #     print("pi mask")
-        #     y_tok, tok_tgt, tok_mask = pi_mask(
-        #         y_tok,
+        mask_ins_out, _ = self.decoder.forward_mask_ins(
+            normalize=False,
+            prev_output_tokens=prev_output_tokens,
+            encoder_out=encoder_out,
+        )
+        word_ins_out, _ = self.decoder.forward_word_ins(
+            normalize=False,
+            prev_output_tokens=masked_tgt_tokens,
+            encoder_out=encoder_out,
+        )
+        ############################ pred for del
+        if self.decoder.sampling_for_deletion:
+            word_predictions = torch.multinomial(
+                F.softmax(word_ins_out, -1).view(-1, word_ins_out.size(-1)), 1
+            ).view(word_ins_out.size(0), -1)
+        else:
+            word_predictions = F.log_softmax(word_ins_out, dim=-1).max(2)[1]
+
+        word_predictions.masked_scatter_(
+            ~masked_tgt_masks, tgt_tokens[~masked_tgt_masks]
+        )
+        ############################ del correct levt
+        word_del_targets = _get_del_targets(word_predictions, tgt_tokens, self.pad)
+        word_del_out, _ = self.decoder.forward_word_del(
+            normalize=False,
+            prev_output_tokens=word_predictions,
+            encoder_out=encoder_out,
+        )
+        word_del_masks = word_predictions.ne(self.pad)
+        
+        output = {
+            "mask_ins": {
+                "out": mask_ins_out,
+                "tgt": mask_ins_targets,
+                "mask": mask_ins_masks,
+                "ls": 0.01,
+            },
+            "word_ins": {
+                "out": word_ins_out,
+                "tgt": tgt_tokens,
+                "mask": masked_tgt_masks,
+                "ls": self.args.label_smoothing,
+                "nll_loss": True,
+            },
+        }
+        output["word_del"] = {
+            "out": word_del_out,
+            "tgt": word_del_targets,
+            "mask": word_del_masks,
+        }
+        # output["prev_word_del"] = {
+        #     "out": prev_word_del_out,
+        #     "tgt": prev_word_del_targets,
+        #     "mask": prev_word_del_masks,
+        # }
+        output["prev_word_del"] = {
+            "out": del_out,
+            "tgt": del_tgt,
+            "mask": del_mask,
+        }
+        return output
+
+        # # choose init
+        # mask_star = self.get_mask_from_prob(y_init_star.size(0), self.beta)
+        # y_del = y_init_star
+        # with torch.no_grad():
+        #     # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        #     #     f.write("\n[")
+        #     res_star = pi_star(
+        #         y_init_star[mask_star],
+        #         tgt_tokens[mask_star],
+        #         pad_symbol=self.pad,
+        #         plh_symbol=self.unk,
+        #         Kmax=self.Kmax,
+        #         device=x.device,
+        #     )
+        #     # print(res_star["tok_tgt"][res_star["tok_mask"]].tolist())
+        #     # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        #     #     f.write("]")
+
+        #     res_del = pi_del(
+        #         y_init_star[~mask_star].shape,
+        #         tgt_tokens[~mask_star],
         #         pad_symbol=self.pad,
         #         plh_symbol=self.unk,
         #         bos_symbol=self.bos,
         #         eos_symbol=self.eos,
+        #         Kmax=self.Kmax,
+        #         device=x.device,
         #     )
+        #     res = self.combine_res(res_star, res_del, mask_star)
+        # self.num_iter += 1
+        # # with open("/mnt/beegfs/home/bouthors/NLP4NLP/scripts/multi-lev/logs/log.txt", 'a') as file_log:
+        # #     file_log.write(">\n")
+        # # if False and rd.random() > self.beta:
+        # #     y_del = y_init_star
+        # #     print("pi star")
+        # #     # obtain y_plh_star, y_cmb_star, y_tok_star with k-multi-alignment (pi^*)
+        # #     with torch.no_grad():
+        # #         res = pi_star(
+        # #             y_init_star,
+        # #             tgt_tokens,
+        # #             pad_symbol=self.pad,
+        # #             plh_symbol=self.unk,
+        # #             Kmax=self.Kmax,
+        # #             device=x.device,
+        # #         )
 
-        # print("encoder out ", encoder_out.keys())
-        # print("y_del", y_del.shape)
-        # print("y_plh", y_plh.shape)
-        # print("y_cmb", y_cmb.shape)
-        # print("y_tok", y_tok.shape)
+        # # else:
+        # #     y_del = y_init_star
+        # #     print("pi del")
+        # #     with torch.no_grad():
+        # #         res = pi_del(
+        # #             y_init_star.shape,
+        # #             tgt_tokens,
+        # #             pad_symbol=self.pad,
+        # #             plh_symbol=self.unk,
+        # #             bos_symbol=self.bos,
+        # #             eos_symbol=self.eos,
+        # #             Kmax=self.Kmax,
+        # #             device=x.device,
+        # #         )
 
-        del_out, _ = self.decoder.forward_del(
-            normalize=False, prev_output_tokens=y_del, encoder_out=encoder_out,
-        )
+        # y_plh = res["y_plh"]
+        # y_cmb = res["y_cmb"]
+        # y_tok = res["y_tok"]
+        # # print("PRESENCE OF <PLH>: ", (res["y_tok"] == 3).sum().item())
+
+        # del_tgt = res["del_tgt"]
+        # del_mask = res["del_mask"]
+
+        # plh_tgt = res["plh_tgt"]
+        # plh_mask = res["plh_mask"]
+
+        # cmb_tgt = res["cmb_tgt"]
+        # cmb_mask = res["cmb_mask"]
+
+        # tok_tgt = res["tok_tgt"]
+        # tok_mask = res["tok_mask"]
+
+        # # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        # #     f.write(str(y_cmb) + "\n>>>>>>>")
+
+        # y_cmb = pi_sel(
+        #     y_cmb,
+        #     y_init_star,
+        #     self.gamma,
+        #     pad_symbol=self.pad,
+        #     plh_symbol=self.unk,
+        #     bos_symbol=self.bos,
+        #     eos_symbol=self.eos,
+        #     device=x.device
+        # )
+        # cmb_tgt = handle_all_plh_case(cmb_tgt, y_tok, self.unk)
+
+        # # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        # #     f.write("=")
+
+        # # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        # #     f.write(str(x) + "\n")
+
+        # mask_mask = self.get_mask_from_prob(y_tok.size(0), self.delta)
+
+        # y_tok[~mask_mask], tok_tgt[~mask_mask], tok_mask[~mask_mask] = pi_mask(
+        #     tok_tgt[~mask_mask],
+        #     pad_symbol=self.pad,
+        #     plh_symbol=self.unk,
+        #     bos_symbol=self.bos,
+        #     eos_symbol=self.eos,
+        #     device=x.device
+        # )
+        # # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        # #     f.write(")))\n")
+
+        # # if rd.random() <= self.delta:
+        # #     print("pi mask")
+        # #     y_tok, tok_tgt, tok_mask = pi_mask(
+        # #         y_tok,
+        # #         pad_symbol=self.pad,
+        # #         plh_symbol=self.unk,
+        # #         bos_symbol=self.bos,
+        # #         eos_symbol=self.eos,
+        # #     )
+
+        # # print("encoder out ", encoder_out.keys())
+        # # print("y_del", y_del.shape)
+        # # print("y_plh", y_plh.shape)
+        # # print("y_cmb", y_cmb.shape)
+        # # print("y_tok", y_tok.shape)
+
+        # del_out, _ = self.decoder.forward_del(
+        #     normalize=False, prev_output_tokens=y_del, encoder_out=encoder_out,
+        # )
+
+        # # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
+        # #     f.write("\n+")
+
+        # plh_out, _ = self.decoder.forward_plh(
+        #     normalize=False, prev_output_tokens=y_plh, encoder_out=encoder_out,
+        # )
+
+        # cmb_out, _ = self.decoder.forward_cmb(
+        #     normalize=False, prev_output_tokens=y_cmb, encoder_out=encoder_out,
+        # )
+        # cmb_out = cmb_out.transpose(1, 2)
+
+        # tok_out, _ = self.decoder.forward_tok(
+        #     normalize=False, prev_output_tokens=y_tok, encoder_out=encoder_out,
+        # )
 
         # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
-        #     f.write("\n+")
+        #     f.write("+")
 
-        plh_out, _ = self.decoder.forward_plh(
-            normalize=False, prev_output_tokens=y_plh, encoder_out=encoder_out,
-        )
+        # # SOURCE OF MY PROBLEMS??????
+        # # del_out = F.softmax(del_out, -1)
+        # # plh_out = F.softmax(plh_out, -1)
+        # # cmb_out = F.softmax(cmb_out, -1)
+        # # tok_out = F.softmax(tok_out, -1)
 
-        cmb_out, _ = self.decoder.forward_cmb(
-            normalize=False, prev_output_tokens=y_cmb, encoder_out=encoder_out,
-        )
-        cmb_out = cmb_out.transpose(1, 2)
-
-        tok_out, _ = self.decoder.forward_tok(
-            normalize=False, prev_output_tokens=y_tok, encoder_out=encoder_out,
-        )
-
-        with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug.log", "a") as f:
-            f.write("+")
-
-        # SOURCE OF MY PROBLEMS??????
-        # del_out = F.softmax(del_out, -1)
-        # plh_out = F.softmax(plh_out, -1)
-        # cmb_out = F.softmax(cmb_out, -1)
-        # tok_out = F.softmax(tok_out, -1)
-
-        # print("#############################")
-        # print("del_out", del_out.shape)
-        # print("plh_out", plh_out.shape)
-        # print("cmb_out", cmb_out.shape)
-        # print("tok_out", tok_out.shape)
-        # print()
-        # print("del_tgt", del_tgt.shape, torch.unique(del_tgt.cpu(), return_counts=True))
-        # print("plh_tgt", plh_tgt.shape, torch.unique(plh_tgt.cpu(), return_counts=True))
-        # print("cmb_tgt", cmb_tgt.shape, torch.unique(cmb_tgt.cpu(), return_counts=True))
-        # print("tok_tgt", tok_tgt.shape)
-        # print()
-        # print("del_mask", del_mask.shape)
-        # print("plh_mask", plh_mask.shape)
-        # print("cmb_mask", cmb_mask.shape)
-        # print("tok_mask", tok_mask.shape)
-        # print("#############################")
+        # # print("#############################")
+        # # print("del_out", del_out.shape)
+        # # print("plh_out", plh_out.shape)
+        # # print("cmb_out", cmb_out.shape)
+        # # print("tok_out", tok_out.shape)
         # # print()
-        # # print("del_tgt", del_tgt[0])
-        # # print("plh_tgt", plh_tgt[0])
-        # # print("cmb_tgt", cmb_tgt[0])
+        # # print("del_tgt", del_tgt.shape, torch.unique(del_tgt.cpu(), return_counts=True))
+        # # print("plh_tgt", plh_tgt.shape, torch.unique(plh_tgt.cpu(), return_counts=True))
+        # # print("cmb_tgt", cmb_tgt.shape, torch.unique(cmb_tgt.cpu(), return_counts=True))
         # # print("tok_tgt", tok_tgt.shape)
         # # print()
         # # print("del_mask", del_mask.shape)
         # # print("plh_mask", plh_mask.shape)
         # # print("cmb_mask", cmb_mask.shape)
         # # print("tok_mask", tok_mask.shape)
+        # # print("#############################")
+        # # # print()
+        # # # print("del_tgt", del_tgt[0])
+        # # # print("plh_tgt", plh_tgt[0])
+        # # # print("cmb_tgt", cmb_tgt[0])
+        # # # print("tok_tgt", tok_tgt.shape)
+        # # # print()
+        # # # print("del_mask", del_mask.shape)
+        # # # print("plh_mask", plh_mask.shape)
+        # # # print("cmb_mask", cmb_mask.shape)
+        # # # print("tok_mask", tok_mask.shape)
+
+        # # return {
+        # #     "del": {"out": del_out, "tgt": del_tgt, "mask": del_mask,},
+        # # }
 
         # return {
-        #     "del": {"out": del_out, "tgt": del_tgt, "mask": del_mask,},
+        #     "plh": {"out": plh_out, "tgt": plh_tgt, "mask": plh_mask, "ls": 0.01, },
+        #     "tok": {
+        #         "out": tok_out,
+        #         "tgt": tok_tgt,
+        #         "mask": tok_mask,
+        #         "ls": self.args.label_smoothing,
+        #         "nll_loss": True,
+        #     },
+        #     "del": {"out": del_out, "tgt": del_tgt, "mask": del_mask, },
+        #     "cmb": {"out": cmb_out, "tgt": cmb_tgt, "mask": cmb_mask, },
         # }
 
-        return {
-            "plh": {"out": plh_out, "tgt": plh_tgt, "mask": plh_mask, "ls": 0.01, },
-            "tok": {
-                "out": tok_out,
-                "tgt": tok_tgt,
-                "mask": tok_mask,
-                "ls": self.args.label_smoothing,
-                "nll_loss": True,
-            },
-            "del": {"out": del_out, "tgt": del_tgt, "mask": del_mask, },
-            "cmb": {"out": cmb_out, "tgt": cmb_tgt, "mask": cmb_mask, },
-        }
+    # def forward_debug(
+    #     self, x, y_init_star, src_lengths=None, **kwargs
+    # ):
+    #     with torch.no_grad():
+    #         # encoding
+    #         encoder_out = self.encoder(x, src_lengths=src_lengths, **kwargs)
+    #         # print("encoder out", encoder_out)
 
-    def forward_debug(
-        self, x, y_init_star, src_lengths=None, **kwargs
-    ):
-        with torch.no_grad():
-            # encoding
-            encoder_out = self.encoder(x, src_lengths=src_lengths, **kwargs)
-            # print("encoder out", encoder_out)
+    #         # choose init
+    #         y_del = y_init_star
 
-            # choose init
-            y_del = y_init_star
+    #         del_out, _ = self.decoder.forward_del(
+    #             normalize=True,
+    #             prev_output_tokens=y_del,
+    #             encoder_out=encoder_out,
+    #         )
 
-            del_out, _ = self.decoder.forward_del(
-                normalize=True,
-                prev_output_tokens=y_del,
-                encoder_out=encoder_out,
-            )
+    #         # plh_out, _ = self.decoder.forward_plh(
+    #         #     normalize=True, prev_output_tokens=y_plh, encoder_out=encoder_out,
+    #         # )
 
-            # plh_out, _ = self.decoder.forward_plh(
-            #     normalize=True, prev_output_tokens=y_plh, encoder_out=encoder_out,
-            # )
+    #         # cmb_out, _ = self.decoder.forward_cmb(
+    #         #     normalize=True, prev_output_tokens=y_cmb, encoder_out=encoder_out,
+    #         # )
 
-            # cmb_out, _ = self.decoder.forward_cmb(
-            #     normalize=True, prev_output_tokens=y_cmb, encoder_out=encoder_out,
-            # )
+    #         # tok_out, _ = self.decoder.forward_tok(
+    #         #     normalize=True, prev_output_tokens=y_tok, encoder_out=encoder_out,
+    #         # )
 
-            # tok_out, _ = self.decoder.forward_tok(
-            #     normalize=True, prev_output_tokens=y_tok, encoder_out=encoder_out,
-            # )
+    #     return {
+    #         "del_out": del_out,
+    #         # "plh_out": plh_out,
+    #         # "cmb_out": cmb_out,
+    #         # "tok_out": tok_out,
+    #     }
 
-        return {
-            "del_out": del_out,
-            # "plh_out": plh_out,
-            # "cmb_out": cmb_out,
-            # "tok_out": tok_out,
-        }
+    # def forward_decoder(
+    #     self, decoder_out, encoder_out, eos_penalty=0.0, max_ratio=None, **kwargs
+    # ):
 
-    def forward_decoder(
-        self, decoder_out, encoder_out, eos_penalty=0.0, max_ratio=None, **kwargs
-    ):
+    #     output_tokens = decoder_out.output_tokens  # B x N x M
+    #     history = decoder_out.history
 
-        output_tokens = decoder_out.output_tokens  # B x N x M
-        history = decoder_out.history
+    #     max_lens = 255
+    #     verbose = 1
 
-        max_lens = 255
-        verbose = 1
+    #     # delete words
+    #     # do not delete tokens if it is <s> </s>
 
-        # delete words
-        # do not delete tokens if it is <s> </s>
+    #     can_del_word = (output_tokens.ne(self.pad).sum(-1) > 2).any(-1)
 
-        can_del_word = (output_tokens.ne(self.pad).sum(-1) > 2).any(-1)
+    #     if can_del_word.sum() != 0:  # we cannot delete, skip
 
-        if can_del_word.sum() != 0:  # we cannot delete, skip
+    #         # Skip ignores batch element with no possible deletion
+    #         del_out, _ = self.decoder.forward_del(
+    #             normalize=True,
+    #             prev_output_tokens=_skip(output_tokens, can_del_word),
+    #             encoder_out=_skip_encoder_out(
+    #                 self.encoder, encoder_out, can_del_word),
+    #         )
+    #         del_out = F.softmax(del_out, -1)
+    #         del_pred = del_out.max(-1)[1].bool()
+    #         if verbose:
+    #             ranger = (
+    #                 torch.arange(2, dtype=del_out.dtype, device=del_out.device)
+    #                 .view(1, 1, 1, -1)
+    #                 .expand(del_out.shape)
+    #             )
+    #             res = (ranger * del_out).sum(-1).mean(0)
+    #             #                print("del_pred mean", del_pred.float().mean(0))
+    #             print("del_pred expect", res)
 
-            # Skip ignores batch element with no possible deletion
-            del_out, _ = self.decoder.forward_del(
-                normalize=True,
-                prev_output_tokens=_skip(output_tokens, can_del_word),
-                encoder_out=_skip_encoder_out(
-                    self.encoder, encoder_out, can_del_word),
-            )
-            del_out = F.softmax(del_out, -1)
-            del_pred = del_out.max(-1)[1].bool()
-            if verbose:
-                ranger = (
-                    torch.arange(2, dtype=del_out.dtype, device=del_out.device)
-                    .view(1, 1, 1, -1)
-                    .expand(del_out.shape)
-                )
-                res = (ranger * del_out).sum(-1).mean(0)
-                #                print("del_pred mean", del_pred.float().mean(0))
-                print("del_pred expect", res)
+    #         _tokens = apply_del(
+    #             output_tokens[can_del_word], del_pred, self.pad, self.bos, self.eos,
+    #         )
+    #         output_tokens = _fill(
+    #             output_tokens, can_del_word, _tokens, self.pad)
 
-            _tokens = apply_del(
-                output_tokens[can_del_word], del_pred, self.pad, self.bos, self.eos,
-            )
-            output_tokens = _fill(
-                output_tokens, can_del_word, _tokens, self.pad)
+    #         if history is not None:
+    #             history.append(output_tokens.clone())
 
-            if history is not None:
-                history.append(output_tokens.clone())
+    #     # insert placeholders
+    #     can_plh = (output_tokens.ne(self.pad).sum(-1) < max_lens).any(-1)
+    #     if can_plh.sum() != 0:
+    #         plh_out, _ = self.decoder.forward_plh(
+    #             normalize=True,
+    #             prev_output_tokens=_skip(output_tokens, can_plh),
+    #             encoder_out=_skip_encoder_out(
+    #                 self.encoder, encoder_out, can_plh),
+    #         )
+    #         if eos_penalty > 0.0:
+    #             plh_out[:, :, :, 0] = plh_out[:, :, :, 0] - eos_penalty
+    #         plh_out = F.softmax(plh_out, -1)
+    #         plh_pred = plh_out.max(-1)[1]
+    #         plh_pred = torch.minimum(
+    #             plh_pred,
+    #             torch.tensor(255, device=plh_pred.device,
+    #                          dtype=plh_pred.dtype),
+    #         )
+    #         if verbose:
+    #             ranger = (
+    #                 torch.arange(
+    #                     plh_out.size(-1), dtype=plh_out.dtype, device=plh_out.device
+    #                 )
+    #                 .view(1, 1, 1, -1)
+    #                 .expand(plh_out.shape)
+    #             )
+    #             res = (ranger * plh_out).sum(-1).mean(0)
+    #             print("plh_pred expect", res)
+    #         #                print("plh_pred mean", plh_pred.float().mean(0))
 
-        # insert placeholders
-        can_plh = (output_tokens.ne(self.pad).sum(-1) < max_lens).any(-1)
-        if can_plh.sum() != 0:
-            plh_out, _ = self.decoder.forward_plh(
-                normalize=True,
-                prev_output_tokens=_skip(output_tokens, can_plh),
-                encoder_out=_skip_encoder_out(
-                    self.encoder, encoder_out, can_plh),
-            )
-            if eos_penalty > 0.0:
-                plh_out[:, :, :, 0] = plh_out[:, :, :, 0] - eos_penalty
-            plh_out = F.softmax(plh_out, -1)
-            plh_pred = plh_out.max(-1)[1]
-            plh_pred = torch.minimum(
-                plh_pred,
-                torch.tensor(255, device=plh_pred.device,
-                             dtype=plh_pred.dtype),
-            )
-            if verbose:
-                ranger = (
-                    torch.arange(
-                        plh_out.size(-1), dtype=plh_out.dtype, device=plh_out.device
-                    )
-                    .view(1, 1, 1, -1)
-                    .expand(plh_out.shape)
-                )
-                res = (ranger * plh_out).sum(-1).mean(0)
-                print("plh_pred expect", res)
-            #                print("plh_pred mean", plh_pred.float().mean(0))
+    #         _tokens = apply_plh(
+    #             output_tokens[can_plh], plh_pred, self.pad, self.unk, self.eos,
+    #         )
+    #         output_tokens = _fill(output_tokens, can_plh, _tokens, self.pad)
 
-            _tokens = apply_plh(
-                output_tokens[can_plh], plh_pred, self.pad, self.unk, self.eos,
-            )
-            output_tokens = _fill(output_tokens, can_plh, _tokens, self.pad)
+    #         if history is not None:
+    #             history.append(output_tokens.clone())
+    #     cmb_len = (output_tokens == self.eos).long(
+    #     ).argsort(-1)[:, :, -1].max(-1)[0]
+    #     mask_inf = (
+    #         (
+    #             torch.arange(output_tokens.size(-1),
+    #                          device=output_tokens.device)
+    #             .view(1, -1)
+    #             .expand(len(cmb_len), -1)
+    #             < cmb_len.view(-1, 1).expand(-1, output_tokens.size(-1))
+    #         )
+    #         .view(len(cmb_len), 1, output_tokens.size(-1))
+    #         .expand(-1, output_tokens.size(1), -1)
+    #     )
+    #     mask_eq = (
+    #         (
+    #             torch.arange(output_tokens.size(-1),
+    #                          device=output_tokens.device)
+    #             .view(1, -1)
+    #             .expand(len(cmb_len), -1)
+    #             == cmb_len.view(-1, 1).expand(-1, output_tokens.size(-1))
+    #         )
+    #         .view(len(cmb_len), 1, output_tokens.size(-1))
+    #         .expand(-1, output_tokens.size(1), -1)
+    #     )
+    #     output_tokens[mask_eq] = self.eos
+    #     output_tokens[
+    #         mask_inf & ((output_tokens == self.eos) |
+    #                     (output_tokens == self.pad))
+    #     ] = self.unk
 
-            if history is not None:
-                history.append(output_tokens.clone())
-        cmb_len = (output_tokens == self.eos).long(
-        ).argsort(-1)[:, :, -1].max(-1)[0]
-        mask_inf = (
-            (
-                torch.arange(output_tokens.size(-1),
-                             device=output_tokens.device)
-                .view(1, -1)
-                .expand(len(cmb_len), -1)
-                < cmb_len.view(-1, 1).expand(-1, output_tokens.size(-1))
-            )
-            .view(len(cmb_len), 1, output_tokens.size(-1))
-            .expand(-1, output_tokens.size(1), -1)
-        )
-        mask_eq = (
-            (
-                torch.arange(output_tokens.size(-1),
-                             device=output_tokens.device)
-                .view(1, -1)
-                .expand(len(cmb_len), -1)
-                == cmb_len.view(-1, 1).expand(-1, output_tokens.size(-1))
-            )
-            .view(len(cmb_len), 1, output_tokens.size(-1))
-            .expand(-1, output_tokens.size(1), -1)
-        )
-        output_tokens[mask_eq] = self.eos
-        output_tokens[
-            mask_inf & ((output_tokens == self.eos) |
-                        (output_tokens == self.pad))
-        ] = self.unk
+    #     # merge sequences
+    #     cmb_out, _ = self.decoder.forward_cmb(
+    #         normalize=True, prev_output_tokens=output_tokens, encoder_out=encoder_out,
+    #     )
+    #     plh_out = F.softmax(plh_out, -1)
+    #     cmb_pred = cmb_out[:, :, :, 1]
+    #     #        cmb_pred = cmb_out.max(-1)[1]
+    #     if verbose:
+    #         ranger = (
+    #             torch.arange(
+    #                 cmb_out.size(-1), dtype=cmb_out.dtype, device=cmb_out.device
+    #             )
+    #             .view(1, 1, 1, -1)
+    #             .expand(cmb_out.shape)
+    #         )
+    #         res = (ranger * cmb_out).sum(-1).mean(0)
+    #         print("cmb_pred expect", res)
+    #     #            print("cmb_pred mean", cmb_out.max(-1)[1].float().mean(0))
 
-        # merge sequences
-        cmb_out, _ = self.decoder.forward_cmb(
-            normalize=True, prev_output_tokens=output_tokens, encoder_out=encoder_out,
-        )
-        plh_out = F.softmax(plh_out, -1)
-        cmb_pred = cmb_out[:, :, :, 1]
-        #        cmb_pred = cmb_out.max(-1)[1]
-        if verbose:
-            ranger = (
-                torch.arange(
-                    cmb_out.size(-1), dtype=cmb_out.dtype, device=cmb_out.device
-                )
-                .view(1, 1, 1, -1)
-                .expand(cmb_out.shape)
-            )
-            res = (ranger * cmb_out).sum(-1).mean(0)
-            print("cmb_pred expect", res)
-        #            print("cmb_pred mean", cmb_out.max(-1)[1].float().mean(0))
+    #     output_tokens = apply_cmb(
+    #         output_tokens, cmb_pred, self.pad, self.bos, self.eos, self.unk,
+    #     )
+    #     if history is not None:
+    #         history.append(output_tokens.clone())
 
-        output_tokens = apply_cmb(
-            output_tokens, cmb_pred, self.pad, self.bos, self.eos, self.unk,
-        )
-        if history is not None:
-            history.append(output_tokens.clone())
+    #     # insert tok
+    #     can_tok = output_tokens.eq(self.unk).sum(1) > 0
+    #     if can_tok.sum() != 0:
+    #         # print("before tok >>>", _skip(output_tokens, can_tok).cpu().numpy().tolist())
+    #         tok_out, _ = self.decoder.forward_tok(
+    #             normalize=True,
+    #             prev_output_tokens=_skip(output_tokens, can_tok),
+    #             encoder_out=_skip_encoder_out(
+    #                 self.encoder, encoder_out, can_tok),
+    #         )
+    #         tok_out[:, 3] = tok_out[:, 0] - 10
+    #         _, tok_pred = tok_out.max(-1)
+    #         tok_out = F.softmax(tok_out, -1)
+    #         # if verbose:
+    #         #     ranger = (
+    #         #         torch.arange(
+    #         #             tok_out.size(-1), dtype=tok_out.dtype, device=tok_out.device
+    #         #         )
+    #         #         .view(1, 1, 1, -1)
+    #         #         .expand(tok_out.shape)
+    #         #     )
+    #         #     res = (ranger * tok_pred).sum(-1).mean(0)
+    #         #     print("tok_pred expect", res)
+    #         #                print("tok_pred mean", tok_pred.float().mean(0))
 
-        # insert tok
-        can_tok = output_tokens.eq(self.unk).sum(1) > 0
-        if can_tok.sum() != 0:
-            # print("before tok >>>", _skip(output_tokens, can_tok).cpu().numpy().tolist())
-            tok_out, _ = self.decoder.forward_tok(
-                normalize=True,
-                prev_output_tokens=_skip(output_tokens, can_tok),
-                encoder_out=_skip_encoder_out(
-                    self.encoder, encoder_out, can_tok),
-            )
-            tok_out[:, 3] = tok_out[:, 0] - 10
-            _, tok_pred = tok_out.max(-1)
-            tok_out = F.softmax(tok_out, -1)
-            # if verbose:
-            #     ranger = (
-            #         torch.arange(
-            #             tok_out.size(-1), dtype=tok_out.dtype, device=tok_out.device
-            #         )
-            #         .view(1, 1, 1, -1)
-            #         .expand(tok_out.shape)
-            #     )
-            #     res = (ranger * tok_pred).sum(-1).mean(0)
-            #     print("tok_pred expect", res)
-            #                print("tok_pred mean", tok_pred.float().mean(0))
+    #         _tokens = apply_tok(output_tokens[can_tok], tok_pred, self.unk,)
 
-            _tokens = apply_tok(output_tokens[can_tok], tok_pred, self.unk,)
+    #         output_tokens = _fill(output_tokens, can_tok, _tokens, self.pad)
 
-            output_tokens = _fill(output_tokens, can_tok, _tokens, self.pad)
+    #         # print("after tok >>>", _skip(output_tokens, can_tok).cpu().numpy().tolist())
 
-            # print("after tok >>>", _skip(output_tokens, can_tok).cpu().numpy().tolist())
+    #         if history is not None:
+    #             history.append(output_tokens.clone())
+    #     else:
+    #         print("=== no <unk> to fill????")
+    #     # delete some unnecessary paddings
+    #     cut_off = output_tokens.ne(self.pad).sum(-1).max()
+    #     output_tokens = output_tokens[:, :cut_off]
+    #     # output_score = decoder_out.output_scores[:, :cut_off]
+    #     output_scores = torch.zeros_like(
+    #         output_tokens, dtype=torch.float, device=output_tokens.device)
 
-            if history is not None:
-                history.append(output_tokens.clone())
-        else:
-            print("=== no <unk> to fill????")
-        # delete some unnecessary paddings
-        cut_off = output_tokens.ne(self.pad).sum(-1).max()
-        output_tokens = output_tokens[:, :cut_off]
-        # output_score = decoder_out.output_scores[:, :cut_off]
-        output_scores = torch.zeros_like(
-            output_tokens, dtype=torch.float, device=output_tokens.device)
-
-        return decoder_out._replace(
-            output_tokens=output_tokens,
-            output_scores=output_scores,
-            attn=None if decoder_out.attn is None else decoder_out.attn[:, :cut_off, :],
-            history=history,
-        )
+    #     return decoder_out._replace(
+    #         output_tokens=output_tokens,
+    #         output_scores=output_scores,
+    #         attn=None if decoder_out.attn is None else decoder_out.attn[:, :cut_off, :],
+    #         history=history,
+    #     )
 
     def initialize_output_tokens(self, encoder_out, multi_src_tokens):
 
@@ -648,14 +808,14 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
         self.eos = dictionary.eos()
         self.sampling_for_deletion = getattr(
             args, "sampling_for_deletion", False)
-        self.Kmax = args.plh_max_num_insert
-        self.embed_plh = Embedding(self.Kmax, self.output_embed_dim * 2, None)
-        self.embed_del = Embedding(2, self.output_embed_dim, None)
+        self.Kmax = 64
+        self.embed_mask_ins = Embedding(self.Kmax, self.output_embed_dim * 2, None)
+        self.embed_word_del = Embedding(2, self.output_embed_dim, None)
         #        self.embed_cmb = Embedding(2, self.output_embed_dim, None)
-        self.embed_cmb = nn.Linear(self.output_embed_dim, 1)
-        self.embed_tok = nn.Linear(self.output_embed_dim, len(self.dictionary))
+        # self.embed_cmb = nn.Linear(self.output_embed_dim, 1)
+        # self.embed_tok = nn.Linear(self.output_embed_dim, len(self.dictionary))
         self.num_retrieved = args.num_retrieved
-        self.embed_seq_tok = embed_tokens
+        # self.embed_seq_tok = embed_tokens
         self.embed_seq_num = Embedding(
             self.num_retrieved + 1, embed_tokens.embedding_dim, None
         )
@@ -673,7 +833,7 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                     for _ in range(self.early_exit[0])
                 ]
             )
-        self.layers_plh = None
+        self.layers_msk = None
         if getattr(args, "no_share_maskpredictor", False):
             self.layers_msk = nn.ModuleList(
                 [
@@ -681,32 +841,32 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                     for _ in range(self.early_exit[1])
                 ]
             )
-        self.layers_cmb = None
-        if getattr(args, "no_share_maskpredictor", False):
-            self.layers_cmb = nn.ModuleList(
-                [
-                    TransformerDecoderLayer(args, no_encoder_attn)
-                    for _ in range(self.early_exit[2])
-                ]
-            )
-        self.layers_tok = None
-        if getattr(args, "no_share_maskpredictor", False):
-            self.layers_tok = nn.ModuleList(
-                [
-                    TransformerDecoderLayer(args, no_encoder_attn)
-                    for _ in range(self.early_exit[3])
-                ]
-            )
+        # self.layers_cmb = None
+        # if getattr(args, "no_share_maskpredictor", False):
+        #     self.layers_cmb = nn.ModuleList(
+        #         [
+        #             TransformerDecoderLayer(args, no_encoder_attn)
+        #             for _ in range(self.early_exit[2])
+        #         ]
+        #     )
+        # self.layers_tok = None
+        # if getattr(args, "no_share_maskpredictor", False):
+        #     self.layers_tok = nn.ModuleList(
+        #         [
+        #             TransformerDecoderLayer(args, no_encoder_attn)
+        #             for _ in range(self.early_exit[3])
+        #         ]
+        #     )
         if getattr(args, "share_discriminator_maskpredictor", False):
             assert getattr(
                 args, "no_share_discriminator", False
             ), "must set saperate discriminator"
             self.layers_msk = self.layers_del
 
-    def output_layer(self, features):
-        return self.embed_tok(features)
+    # def output_layer(self, features):
+    #     return self.embed_tok(features)
 
-    def extract_features(
+    def extract_features_multi(
         self,
         prev_output_tokens,
         encoder_out=None,
@@ -850,7 +1010,7 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
 
     @ensemble_decoder
     def forward_del(self, normalize, encoder_out, prev_output_tokens, **unused):
-        features, extra = self.extract_features(
+        features, extra = self.extract_features_multi(
             prev_output_tokens,
             encoder_out=encoder_out,
             early_exit=self.early_exit[0],
@@ -860,58 +1020,161 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
         )
         # features: batch x N x M x d
         # print("features", features)
-        decoder_out = F.linear(features, self.embed_del.weight)
+        decoder_out = F.linear(features, self.embed_word_del.weight)
+        if normalize:
+            return F.log_softmax(decoder_out, -1), extra["attn"]
+        return decoder_out, extra["attn"]
+
+    # @ensemble_decoder
+    # def forward_plh(self, normalize, encoder_out, prev_output_tokens, **unused):
+    #     features, extra = self.extract_features(
+    #         prev_output_tokens,
+    #         encoder_out=encoder_out,
+    #         early_exit=self.early_exit[1],
+    #         layers=self.layers_plh,
+    #         multi_len=True,
+    #         **unused
+    #     )
+    #     # features: batch x N x M x d
+    #     # print("features", features.shape)
+
+    #     features_cat = torch.cat(
+    #         [features[:, :, :-1, :], features[:, :, 1:, :]], -1)
+    #     # print("features_cat", features_cat.shape)
+    #     # print("self.embed_plh.weight", self.embed_plh.weight.shape)
+    #     decoder_out = F.linear(features_cat, self.embed_plh.weight)
+    #     if normalize:
+    #         return F.log_softmax(decoder_out, -1), extra["attn"]
+    #     return decoder_out, extra["attn"]
+
+    # @ensemble_decoder
+    # def forward_cmb(self, normalize, encoder_out, prev_output_tokens, **unused):
+    #     features, extra = self.extract_features(
+    #         prev_output_tokens,
+    #         encoder_out=encoder_out,
+    #         early_exit=self.early_exit[1],
+    #         layers=self.layers_cmb,
+    #         multi_len=True,
+    #         **unused
+    #     )
+    #     # features: batch x N x M x d
+    #     decoder_out = (
+    #         self.embed_cmb(features).transpose(1, 2).squeeze(-1)
+    #     )  # batch x M x N
+    #     decoder_out = torch.sigmoid(decoder_out)
+    #     decoder_out = torch.stack(
+    #         (decoder_out, 1 - decoder_out), dim=-1
+    #     )  # batch x M x N x 2
+
+    #     # decoder_out: batch x M x N
+
+    #     return decoder_out[:, :, :, :], extra["attn"]
+
+    # @ensemble_decoder
+    # def forward_tok(self, normalize, encoder_out, prev_output_tokens, **unused):
+    #     features, extra = self.extract_features(
+    #         prev_output_tokens,
+    #         encoder_out=encoder_out,
+    #         early_exit=self.early_exit[2],
+    #         layers=self.layers,
+    #         **unused
+    #     )
+    #     # features: batch x M x d
+    #     decoder_out = self.output_layer(features)
+    #     if normalize:
+    #         return F.log_softmax(decoder_out, -1), extra["attn"]
+    #     return decoder_out, extra["attn"]
+
+    def extract_features(
+        self,
+        prev_output_tokens,
+        encoder_out=None,
+        early_exit=None,
+        layers=None,
+        **unused
+    ):
+        """
+        Similar to *forward* but only return features.
+        Inputs:
+            prev_output_tokens: Tensor(B, T)
+            encoder_out: a dictionary of hidden states and masks
+
+        Returns:
+            tuple:
+                - the decoder's features of shape `(batch, tgt_len, embed_dim)`
+                - a dictionary with any model-specific outputs
+            the LevenshteinTransformer decoder has full-attention to all generated tokens
+        """
+        # embed positions
+        positions = (
+            self.embed_positions(prev_output_tokens)
+            if self.embed_positions is not None
+            else None
+        )
+
+        # embed tokens and positions
+        x = self.embed_scale * self.embed_tokens(prev_output_tokens)
+        if self.project_in_dim is not None:
+            x = self.project_in_dim(x)
+
+        if positions is not None:
+            x += positions
+        x = self.dropout_module(x)
+
+        # B x T x C -> T x B x C
+        x = x.transpose(0, 1)
+        attn = None
+        inner_states = [x]
+
+        # decoder layers
+        decoder_padding_mask = prev_output_tokens.eq(self.padding_idx)
+        layers = self.layers if layers is None else layers
+        early_exit = len(layers) if early_exit is None else early_exit
+        for _, layer in enumerate(layers[:early_exit]):
+            x, attn, _ = layer(
+                x,
+                encoder_out["encoder_out"][0]
+                if (encoder_out is not None and len(encoder_out["encoder_out"]) > 0)
+                else None,
+                encoder_out["encoder_padding_mask"][0]
+                if (
+                    encoder_out is not None
+                    and len(encoder_out["encoder_padding_mask"]) > 0
+                )
+                else None,
+                self_attn_mask=None,
+                self_attn_padding_mask=decoder_padding_mask,
+            )
+            inner_states.append(x)
+
+        if self.layer_norm:
+            x = self.layer_norm(x)
+
+        # T x B x C -> B x T x C
+        x = x.transpose(0, 1)
+
+        if self.project_out_dim is not None:
+            x = self.project_out_dim(x)
+
+        return x, {"attn": attn, "inner_states": inner_states}
+
+    @ensemble_decoder
+    def forward_mask_ins(self, normalize, encoder_out, prev_output_tokens, **unused):
+        features, extra = self.extract_features(
+            prev_output_tokens,
+            encoder_out=encoder_out,
+            early_exit=self.early_exit[1],
+            layers=self.layers_msk,
+            **unused
+        )
+        features_cat = torch.cat([features[:, :-1, :], features[:, 1:, :]], 2)
+        decoder_out = F.linear(features_cat, self.embed_mask_ins.weight)
         if normalize:
             return F.log_softmax(decoder_out, -1), extra["attn"]
         return decoder_out, extra["attn"]
 
     @ensemble_decoder
-    def forward_plh(self, normalize, encoder_out, prev_output_tokens, **unused):
-        features, extra = self.extract_features(
-            prev_output_tokens,
-            encoder_out=encoder_out,
-            early_exit=self.early_exit[1],
-            layers=self.layers_plh,
-            multi_len=True,
-            **unused
-        )
-        # features: batch x N x M x d
-        # print("features", features.shape)
-
-        features_cat = torch.cat(
-            [features[:, :, :-1, :], features[:, :, 1:, :]], -1)
-        # print("features_cat", features_cat.shape)
-        # print("self.embed_plh.weight", self.embed_plh.weight.shape)
-        decoder_out = F.linear(features_cat, self.embed_plh.weight)
-        if normalize:
-            return F.log_softmax(decoder_out, -1), extra["attn"]
-        return decoder_out, extra["attn"]
-
-    @ensemble_decoder
-    def forward_cmb(self, normalize, encoder_out, prev_output_tokens, **unused):
-        features, extra = self.extract_features(
-            prev_output_tokens,
-            encoder_out=encoder_out,
-            early_exit=self.early_exit[1],
-            layers=self.layers_cmb,
-            multi_len=True,
-            **unused
-        )
-        # features: batch x N x M x d
-        decoder_out = (
-            self.embed_cmb(features).transpose(1, 2).squeeze(-1)
-        )  # batch x M x N
-        decoder_out = torch.sigmoid(decoder_out)
-        decoder_out = torch.stack(
-            (decoder_out, 1 - decoder_out), dim=-1
-        )  # batch x M x N x 2
-
-        # decoder_out: batch x M x N
-
-        return decoder_out[:, :, :, :], extra["attn"]
-
-    @ensemble_decoder
-    def forward_tok(self, normalize, encoder_out, prev_output_tokens, **unused):
+    def forward_word_ins(self, normalize, encoder_out, prev_output_tokens, **unused):
         features, extra = self.extract_features(
             prev_output_tokens,
             encoder_out=encoder_out,
@@ -919,12 +1182,24 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
             layers=self.layers,
             **unused
         )
-        # features: batch x M x d
         decoder_out = self.output_layer(features)
         if normalize:
             return F.log_softmax(decoder_out, -1), extra["attn"]
         return decoder_out, extra["attn"]
 
+    @ensemble_decoder
+    def forward_word_del(self, normalize, encoder_out, prev_output_tokens, **unused):
+        features, extra = self.extract_features(
+            prev_output_tokens,
+            encoder_out=encoder_out,
+            early_exit=self.early_exit[0],
+            layers=self.layers_del,
+            **unused
+        )
+        decoder_out = F.linear(features, self.embed_word_del.weight)
+        if normalize:
+            return F.log_softmax(decoder_out, -1), extra["attn"]
+        return decoder_out, extra["attn"]
 
 @register_model_architecture(
     "multi_lev_transformer", "multi_levenshtein_transformer_base"
