@@ -163,7 +163,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         src_tokens, prev_output_tokens, tgt_tokens = self.regularize_shapes(
             src_tokens, prev_output_tokens, tgt_tokens
         )
-        mask_good = torch.ones(src_tokens.size(0), device=src_tokens.device, dtype=src_tokens.dtype)
+        mask_good = torch.zeros(src_tokens.size(0), device=src_tokens.device, dtype=torch.bool)
         threshold = src_tokens.size(1) / 3 + 10
         if threshold < src_tokens.size(1):
             for b in range(src_tokens.size(0)):
@@ -174,7 +174,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                         for prev_output_tokens_single in prev_output_tokens[b]:
                             if (prev_output_tokens_single == bad_tok).sum() > threshold:
                                 mask_good[b] = False
-        print("mask good", mask_good.cpu().tolist())
+        print("mask good", mask_good.int().cpu().tolist())
         # src_tokens_good, prev_output_tokens_good, tgt_tokens_good = src_tokens[mask_good], prev_output_tokens[mask_good], tgt_tokens[mask_good]
         # src_tokens_bad, prev_output_tokens_bad, tgt_tokens_bad = src_tokens[~mask_good], prev_output_tokens[~mask_good], tgt_tokens[~mask_good]
 
@@ -194,26 +194,75 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 Kmax=self.Kmax,
                 device=src_tokens.device,
             )
-            del_tgt = 1 - res_star["del_tgt"]
-            del_mask = res_star["del_mask"]
-            del_tgt[~del_mask] = 0
-            del_tgt_bad = list()
-            del_mask_bad = list()
-            for n in range(prev_output_tokens.size(1)):
-                del_tgt_bad.append(_get_del_targets(
-                    prev_output_tokens[~mask_good][:, n], 
-                    tgt_tokens[~mask_good], 
-                    self.pad
-                ).unsqueeze(1))
-                del_mask_bad.append(prev_output_tokens[~mask_good][:, n].ne(self.pad).unsqueeze(1))
-            del_tgt_bad = torch.cat(del_tgt_bad, dim=1)
-            del_mask_bad = torch.cat(del_mask_bad, dim=1)
-            
-            res = self.combine_res(
-                {"del_tgt": del_tgt, "del_mask": del_mask},
-                {"del_tgt": del_tgt_bad, "del_mask": del_mask_bad},
-                mask_good
-            )
+            res_star["del_tgt"] = 1 - res_star["del_tgt"]
+            print("del tgt good", res_star["del_tgt"].shape)
+            print("del msk good", res_star["del_mask"].shape)
+            res_star["del_tgt"][~res_star["del_mask"]] = 0
+            if not mask_good.all():
+                del_tgt_bad = list()
+                del_mask_bad = list()
+                plh_tgt_bad = list()
+                plh_mask_bad = list()
+                tok_mask_bad = None
+                y_cmb_bad = list()
+                y_plh_bad = list()
+                for n in range(prev_output_tokens.size(1)):
+                    ############################ prev del levt
+                    del_tgt_bad.append(_get_del_targets(
+                        prev_output_tokens[~mask_good][:, n], 
+                        tgt_tokens[~mask_good], 
+                        self.pad
+                    ).unsqueeze(1))
+                    del_mask_bad.append(prev_output_tokens[~mask_good][:, n].ne(self.pad).unsqueeze(1))
+                    # y_plh_bad_, _, _ = _apply_del_words(
+                    #     prev_output_tokens,
+                    #     in_scores=None,
+                    #     in_attn=None,
+                    #     word_del_pred=del_tgt_bad[-1].bool() |
+                    #     prev_word_del_out[~mask_good][:, n].max(-1)[1].bool(),
+                    #     padding_idx=self.pad,
+                    #     bos_idx=self.bos,
+                    #     eos_idx=self.eos,
+                    # )
+                    # y_plh_bad.append(y_plh_bad_)
+                    # # delete unnecessary paddings
+                    # # cut_off = y_plh_bad_.ne(self.pad).sum(1).max()
+                    # # y_plh_bad_ = y_plh_bad_[:, :cut_off]
+                    # ############################ ins levt
+                    # masked_tgt_masks, masked_tgt_tokens, mask_ins_targets = _get_ins_targets(
+                    #     y_plh_bad_, tgt_tokens[~mask_good], self.pad, self.unk
+                    # )
+                    # y_cmb_bad.append(masked_tgt_tokens)
+                    # # if tok_mask_bad is None:
+                    # #     tok_mask_bad = masked_tgt_masks
+                    # # else:
+                    # #     tok_mask_bad = (tok_mask_bad & masked_tgt_masks)
+                    # plh_tgt_bad.append(mask_ins_targets.clamp(min=0, max=63))  # for safe prediction
+                    # plh_mask_bad.append(y_plh_bad_[:, 1:].ne(self.pad))
+                del_tgt_bad = torch.cat(del_tgt_bad, dim=1)
+                del_mask_bad = torch.cat(del_mask_bad, dim=1)
+                # y_plh_bad = torch.cat([t.unsqueeze(1) for t in y_plh_bad], dim=1)
+                # y_cmb_bad = torch.cat([t.unsqueeze(1) for t in y_cmb_bad], dim=1)
+                # plh_tgt_bad = torch.cat(plh_tgt_bad, dim=1)
+                # plh_mask_bad = torch.cat(plh_mask_bad, dim=1)
+                # cmb_mask_bad = y_cmb_bad.ne(self.pad)
+                # cmb_tgt_bad = (cmb_mask_bad & y_cmb_bad.ne(self.unk))
+                # y_tok_bad = tgt_tokens[~mask_good][cmb_tgt_bad.ne(self.unk).any(1)]
+                # tok_mask_bad = y_tok_bad.ne(self.unk)
+                # cmb_tgt_bad = cmb_tgt_bad.long().transpose(1, 2) # TRANSPOSE ??????????????
+
+                res = self.combine_res(
+                    {
+                        "del_tgt": del_tgt_bad, "del_mask": del_mask_bad,
+                        # "plh_tgt": plh_tgt_bad, "plh_mask": plh_mask_bad, "y_plh": y_plh_bad,
+                        # "cmb_tgt": cmb_tgt_bad, "cmb_mask": cmb_mask_bad, "y_cmb": y_cmb_bad,
+                        # "tok_tgt": tgt_tokens[~mask_good], "tok_mask": tok_mask_bad, "y_tok": y_tok_bad
+                    },
+                    res_star,
+                    ~mask_good
+                )
+            else:
+                res = {"del_tgt": del_tgt, "del_mask": del_mask}
             del_tgt = res["del_tgt"]
             del_mask = res["del_mask"]
             # print(res_star["tok_tgt"][res_star["tok_mask"]].tolist())
@@ -227,10 +276,24 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             #     Kmax=self.Kmax,
             #     device=x.device,
             # )
-
+        
         del_out, _ = self.decoder.forward_del(
             normalize=False, prev_output_tokens=prev_output_tokens, encoder_out=encoder_out,
         )
+        print("del tgt", del_tgt.shape)
+        print("del msk", del_mask.shape)
+        print("del out", del_out.shape)
+        # mask_ins_out, _ = self.decoder.forward_mask_ins(
+        #     normalize=False,
+        #     prev_output_tokens=prev_output_tokens,
+        #     encoder_out=encoder_out,
+        # )
+        # word_ins_out, _ = self.decoder.forward_word_ins(
+        #     normalize=False,
+        #     prev_output_tokens=masked_tgt_tokens,
+        #     encoder_out=encoder_out,
+        # )
+
         # if len(del_out.shape) == 3:
         #     del_out = del_out.unsqueeze(1)
         # prev_word_del_targets = _get_del_targets(
@@ -245,10 +308,12 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         #     normalize=False, prev_output_tokens=prev_output_tokens, encoder_out=encoder_out,
         # )
         prev_word_del_out = del_out[:, 0]
-        del_tgt = _get_del_targets(prev_output_tokens, tgt_tokens, self.pad)
-        del_mask = prev_output_tokens.ne(self.pad)
+        # del_tgt = del_tgt[:, 0]
+        # del_mask = del_mask[:, 0]
+        # del_tgt = _get_del_targets(prev_output_tokens, tgt_tokens, self.pad)
+        # del_mask = prev_output_tokens.ne(self.pad)
         # prev_word_del_masks = prev_output_tokens.ne(self.pad)
-        prev_word_del_targets = del_tgt
+        prev_word_del_targets = del_tgt[:, 0]
         
 
         ############################ prev del levt
