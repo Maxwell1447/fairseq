@@ -205,9 +205,11 @@ def pi_star(
     }
 
 
-def handle_all_plh_case(cmb_tgt, y_tok, plh_symbol):
-    mask_all_plh = (y_tok == plh_symbol).unsqueeze(1).expand_as(cmb_tgt)
-    cmb_tgt[mask_all_plh] = 1
+def handle_all_plh_case(cmb_tgt, y_tok, y_cmb, plh_symbol):
+    msk_cmb_sel = ((y_tok == plh_symbol) & (~(y_cmb == plh_symbol).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == plh_symbol)
+    # cmb_tgt[msk_cmb_sel] = 7
+    # mask_all_plh = (y_tok == plh_symbol).unsqueeze(1).expand_as(cmb_tgt)
+    cmb_tgt[msk_cmb_sel] = 1
     return cmb_tgt
 
 

@@ -208,8 +208,10 @@ def test_artificial_align(sample_=None):
     
     if sample_ is None:
         sample = dict()
-        sample["multi_source"] = torch.tensor([[0, 7, 9, 6, 4, 2, 1], [0, 9, 7, 6, 4, 9, 2]], dtype=torch.int64).unsqueeze(0)
-        sample["target"] = torch.tensor([[0, 7, 4, 5, 6, 2, 1]], dtype=torch.int64)
+        # sample["multi_source"] = torch.tensor([[0, 7, 9, 6, 4, 2, 1], [0, 9, 7, 6, 4, 9, 2]], dtype=torch.int64).unsqueeze(0)
+        # sample["target"] = torch.tensor([[0, 7, 4, 5, 6, 2, 1]], dtype=torch.int64)
+        sample["multi_source"] = torch.tensor([[0, 9, 5, 6, 9, 2, 1], [0, 4, 6, 9, 9, 9, 2]], dtype=torch.int64).unsqueeze(0)
+        sample["target"] = torch.tensor([[0, 4, 5, 6, 10, 10, 2]], dtype=torch.int64)
     else:
         sample = sample_
         sample["multi_source"] = sample["multi_source"][0].unsqueeze(0).unsqueeze(0)
@@ -224,7 +226,7 @@ def test_artificial_align(sample_=None):
     # print(sample["target"].shape)
     y_init_star, tgt_tokens = sample["multi_source"], sample["target"] 
     
-    mask_star = get_mask_from_prob(y_init_star.size(0), 0.2)
+    mask_star = get_mask_from_prob(y_init_star.size(0), 0.2 * 0)
     res_star = pi_star(
         sample["multi_source"][mask_star],
         sample["target"][mask_star],
@@ -245,7 +247,7 @@ def test_artificial_align(sample_=None):
     )
     res = combine_res(res_star, res_del, mask_star)
 
-    # print(res)
+    print(res)
 
     y_plh = res["y_plh"]
     y_cmb = res["y_cmb"]
@@ -264,18 +266,24 @@ def test_artificial_align(sample_=None):
     tok_tgt = res["tok_tgt"]
     tok_mask = res["tok_mask"]
 
-    y_cmb = pi_sel(
-        y_cmb,
-        y_init_star,
-        0.2,
-        pad_symbol=1,
-        plh_symbol=3,
-        bos_symbol=0,
-        eos_symbol=2,
-        device=tok_mask.device
-    )
+    # y_cmb = pi_sel(
+    #     y_cmb,
+    #     y_init_star,
+    #     0.2,
+    #     pad_symbol=1,
+    #     plh_symbol=3,
+    #     bos_symbol=0,
+    #     eos_symbol=2,
+    #     device=tok_mask.device
+    # )
+    y_cmb[0, 0, 1] = 11
+    y_cmb[0, 1, 4] = 11
 
-    cmb_tgt = handle_all_plh_case(cmb_tgt, y_tok, 3)
+    # cmb_tgt = handle_all_plh_case(cmb_tgt, y_tok, 3)
+    msk_cmb_sel = ((y_tok == 3) & (~(y_cmb == 3).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == 3)
+    cmb_tgt[msk_cmb_sel] = 7
+    print("y_cmb", y_cmb)
+    print("cmb_tgt", cmb_tgt)
 
     mask_mask = get_mask_from_prob(y_tok.size(0), 0.2)   
 
@@ -328,9 +336,9 @@ lmd = load_lang_multi_dataset(
     prepend_bos=True,
 )
 
-# test_artificial_align()
-for i in tqdm(range(len(lmd))):
-    test_artificial_align(lmd[i])
+test_artificial_align()
+# for i in tqdm(range(len(lmd))):
+#     test_artificial_align(lmd[i])
 
 # for i in range(78835):
 #     if (lmd[i]["target"] == 3).any():
