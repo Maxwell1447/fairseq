@@ -111,7 +111,7 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
         """
         nsentences, ntokens = sample["nsentences"], sample["ntokens"]
 
-        # B x T
+        # B x L
         src_tokens, src_lengths = (
             sample["net_input"]["src_tokens"],
             sample["net_input"]["src_lengths"],

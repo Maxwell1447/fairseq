@@ -14,10 +14,10 @@ from tqdm import tqdm
 
 
 src_dict = Dictionary.load(
-    "/mnt/beegfs/home/bouthors/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin-fr-en/dict.fr.txt"
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/ECB/data-bin-noised/dict.fr.txt"
 )
 tgt_dict = Dictionary.load(
-    "/mnt/beegfs/home/bouthors/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin-fr-en/dict.en.txt"
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/ECB/data-bin-noised/dict.en.txt"
 )
 
 
@@ -98,18 +98,19 @@ def load_model():
     # print(parser)
 
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    # parser.add_argument("data", default="/mnt/beegfs/projects/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin")
+    # parser.add_argument("data", default="/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin-noised")
     parser.add_argument("--arch", default="multi_levenshtein_transformer")
     parser.add_argument("--task", default="multi_translation_lev")
-    parser.add_argument("--num-retrieved", default=1, type=int)
+    # parser.add_argument("--num-retrieved", default=1, type=int)
     parser.add_argument("--criterion", default="nat_loss")
     parser.add_argument("--ddp-backend", default="legacy_ddp")
     parser.add_argument("--batch-size", default=1, type=int)
+    # parser.add_argument("--max-valency", default=5, type=int)
     # parser.add_argument("--share-all-embedding", action="store_true")
     # parser.add_argument("--dropout", default=0.3, type=float)
     parser.add_argument(
         "--path", 
-        default="/mnt/beegfs/projects/NLP4NLP/scripts/multi-lev/models-small/transformer-multi-lev-fr-en-debug/checkpoint_last.pt"
+        default="/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/models-small/transformer-multi-lev-fr-en-levtest-8/checkpoint_last.pt"
     )
     args = options.parse_args_and_arch(parser)
     cfg = convert_namespace_to_omegaconf(args)
@@ -141,8 +142,8 @@ def load_model():
 if __name__ == "__main__":
 
     lmd = load_lang_multi_dataset(
-        "/mnt/beegfs/home/bouthors/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin-fr-en",
-        "test",
+        "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/ECB/data-bin-noised",
+        "valid",
         "fr",
         src_dict,
         "en",
@@ -165,13 +166,13 @@ if __name__ == "__main__":
         tgt_dict,
         models=[model],
         eos_penalty=0.0,
-        max_iter=10,
+        max_iter=3,
         max_ratio=2,
         beam_size=1,
         decoding_format=None,
         retain_dropout=False,
         adaptive=True,
-        retain_history=False,
+        retain_history=True,
         reranking=False,
     )
 
@@ -288,7 +289,7 @@ if __name__ == "__main__":
 
     print(len(data_iter))
 
-    for _ in ir.generate_batched_itr(
+    for _, src, ref, hyp in ir.generate_batched_itr(
             data_iter,
             maxlen_a=None,
             maxlen_b=None,
@@ -296,142 +297,157 @@ if __name__ == "__main__":
             timer=None,
             prefix_size=0,
         ):
-        pass
+        # print(src.shape, ref.shape, hyp.shape)
+        print("-" * 80)
+        print("(S):", src_dict.string(src, None, extra_symbols_to_ignore=None))
+        print("(T):", tgt_dict.string(ref, None, extra_symbols_to_ignore=None))
+        # print(type(hyp), hyp)
+        for i, hyp_step in enumerate(hyp[0]["history"]):
+            if i > 3:
+                loop, step = str((i - 1) // 3), str((i - 1) % 3)
+            else:
+                loop, step = str(0), str(i % 4)
+            print(
+                "(H" + loop + "-" + step + "):",
+                tgt_dict.string(hyp_step["tokens"], None, extra_symbols_to_ignore=None)
+            )
 
     print("over")
 
-    sys.exit(8)
+    # sys.exit(8)
 
-    sample = next(data_iter)
-    # print(sample.keys())
-    # print(sample["net_input"].keys())
-    # print(len(data_iter))
-    cpt_del = 0
-    cpt_plh = 0
-    cpt_cmb = 0
-    cpt_tok = 0
-    cpt_del_zeros = 0
-    cpt_plh_non_zeros = 0
-    tot_del = 0
-    tot_plh = 0
-    tot_cmb = 0
-    tot_tok = 0
-    tot_del_zeros = 0
-    tot_plh_non_zeros = 0
-    print("unk = plh =", tgt_dict.unk())
-    print("pad =", tgt_dict.pad())
-    for i, sample in enumerate(data_iter):
+    # sample = next(data_iter)
+    # # print(sample.keys())
+    # # print(sample["net_input"].keys())
+    # # print(len(data_iter))
+    # cpt_del = 0
+    # cpt_plh = 0
+    # cpt_cmb = 0
+    # cpt_tok = 0
+    # cpt_del_zeros = 0
+    # cpt_plh_non_zeros = 0
+    # tot_del = 0
+    # tot_plh = 0
+    # tot_cmb = 0
+    # tot_tok = 0
+    # tot_del_zeros = 0
+    # tot_plh_non_zeros = 0
+    # print("unk = plh =", tgt_dict.unk())
+    # print("pad =", tgt_dict.pad())
+    # for i, sample in enumerate(data_iter):
 
-        print(str(i), end="\r")
-        if i > 4:
-            break
+    #     print(str(i), end="\r")
+    #     if i > 4:
+    #         break
+
+    #     ir.generate([model], sample)
 
         
-        model.forward_decoder(
-            decoder_out, encoder_out, eos_penalty=0.0, max_ratio=None, **kwargs
-        )
+    #     # model.forward_decoder(
+    #     #     decoder_out, encoder_out, eos_penalty=0.0, max_ratio=None, **kwargs
+    #     # )
         
-        # x = sample["net_input"]["src_tokens"]
-        # tgt_tokens = sample["target"]
-        # y_init_star = sample["net_input"]["multi_src_tokens"]
-        # # outputs = model(src_tokens, multi_src_tokens, tgt_tokens)
+    #     # x = sample["net_input"]["src_tokens"]
+    #     # tgt_tokens = sample["target"]
+    #     # y_init_star = sample["net_input"]["multi_src_tokens"]
+    #     # # outputs = model(src_tokens, multi_src_tokens, tgt_tokens)
 
-        # x, y_init_star, tgt_tokens = regularize_shapes(
-        #     x, y_init_star, tgt_tokens
-        # )
+    #     # x, y_init_star, tgt_tokens = regularize_shapes(
+    #     #     x, y_init_star, tgt_tokens
+    #     # )
 
-        # src_lengths = sample["net_input"]["src_lengths"]
+    #     # src_lengths = sample["net_input"]["src_lengths"]
 
-        # with torch.no_grad():
-        #     sample["prev_target"] = None
-        #     criterion(model, sample)
+    #     # with torch.no_grad():
+    #     #     sample["prev_target"] = None
+    #     #     criterion(model, sample)
 
-        # with torch.no_grad():
-        #     out = model(x, src_lengths, y_init_star, tgt_tokens)
-        #     cpt_del += (out["del"]["out"][out["del"]["mask"]].argmax(-1) == out["del"]["tgt"][out["del"]["mask"]]).sum().item()
-        #     cpt_plh += (out["plh"]["out"][out["plh"]["mask"]].argmax(-1) == out["plh"]["tgt"][out["plh"]["mask"]]).sum().item()
-        #     cpt_cmb += (out["cmb"]["out"][out["cmb"]["mask"]].argmax(-1) == out["cmb"]["mask"][out["cmb"]["mask"]]).sum().item()
-        #     cpt_tok += (out["tok"]["out"][out["tok"]["mask"]].argmax(-1) == out["tok"]["tgt"][out["tok"]["mask"]]).sum().item()
-        #     cpt_del_zeros += (
-        #         out["del"]["out"][out["del"]["mask"] & (out["del"]["tgt"] == 0)].argmax(-1) 
-        #         == out["del"]["tgt"][out["del"]["mask"] & (out["del"]["tgt"] == 0)]
-        #     ).sum().item()
-        #     cpt_plh_non_zeros += (
-        #         out["plh"]["out"][out["plh"]["mask"] & (out["plh"]["tgt"].ne(0))].argmax(-1) 
-        #         == out["plh"]["tgt"][out["plh"]["mask"] & (out["plh"]["tgt"].ne(0))]
-        #     ).sum().item()
+    #     # with torch.no_grad():
+    #     #     out = model(x, src_lengths, y_init_star, tgt_tokens)
+    #     #     cpt_del += (out["del"]["out"][out["del"]["mask"]].argmax(-1) == out["del"]["tgt"][out["del"]["mask"]]).sum().item()
+    #     #     cpt_plh += (out["plh"]["out"][out["plh"]["mask"]].argmax(-1) == out["plh"]["tgt"][out["plh"]["mask"]]).sum().item()
+    #     #     cpt_cmb += (out["cmb"]["out"][out["cmb"]["mask"]].argmax(-1) == out["cmb"]["mask"][out["cmb"]["mask"]]).sum().item()
+    #     #     cpt_tok += (out["tok"]["out"][out["tok"]["mask"]].argmax(-1) == out["tok"]["tgt"][out["tok"]["mask"]]).sum().item()
+    #     #     cpt_del_zeros += (
+    #     #         out["del"]["out"][out["del"]["mask"] & (out["del"]["tgt"] == 0)].argmax(-1) 
+    #     #         == out["del"]["tgt"][out["del"]["mask"] & (out["del"]["tgt"] == 0)]
+    #     #     ).sum().item()
+    #     #     cpt_plh_non_zeros += (
+    #     #         out["plh"]["out"][out["plh"]["mask"] & (out["plh"]["tgt"].ne(0))].argmax(-1) 
+    #     #         == out["plh"]["tgt"][out["plh"]["mask"] & (out["plh"]["tgt"].ne(0))]
+    #     #     ).sum().item()
 
-        #     tot_del += out["del"]["mask"].sum().item()
-        #     tot_plh += out["plh"]["mask"].sum().item()
-        #     tot_cmb += out["cmb"]["mask"].sum().item()
-        #     tot_tok += out["tok"]["mask"].sum().item()
-        #     tot_del_zeros += (out["del"]["mask"] & (out["del"]["tgt"] == 0)).sum().item()
-        #     tot_plh_non_zeros += (out["plh"]["mask"] & (out["plh"]["tgt"].ne(0))).sum().item()
+    #     #     tot_del += out["del"]["mask"].sum().item()
+    #     #     tot_plh += out["plh"]["mask"].sum().item()
+    #     #     tot_cmb += out["cmb"]["mask"].sum().item()
+    #     #     tot_tok += out["tok"]["mask"].sum().item()
+    #     #     tot_del_zeros += (out["del"]["mask"] & (out["del"]["tgt"] == 0)).sum().item()
+    #     #     tot_plh_non_zeros += (out["plh"]["mask"] & (out["plh"]["tgt"].ne(0))).sum().item()
 
-        # res_star = pi_star(
-        #     y_init_star,
-        #     tgt_tokens,
-        #     pad_symbol=tgt_dict.pad(),
-        #     plh_symbol=tgt_dict.unk(),
-        #     Kmax=64,
-        #     device="cpu",
-        # )
+    #     # res_star = pi_star(
+    #     #     y_init_star,
+    #     #     tgt_tokens,
+    #     #     pad_symbol=tgt_dict.pad(),
+    #     #     plh_symbol=tgt_dict.unk(),
+    #     #     Kmax=64,
+    #     #     device="cpu",
+    #     # )
 
-        # with torch.no_grad():
-        #     encoder_out = model.encoder(x, src_lengths=src_lengths)
-        #     del_out, _ = model.decoder.forward_del(
-        #         normalize=True,
-        #         prev_output_tokens=y_init_star,
-        #         encoder_out=encoder_out,
-        #     )
-        #     plh_out, _ = model.decoder.forward_plh(
-        #         normalize=True,
-        #         prev_output_tokens=res_star["y_plh"],
-        #         encoder_out=encoder_out,
-        #     )
-        #     cmb_out, _ = model.decoder.forward_cmb(
-        #         normalize=True,
-        #         prev_output_tokens=res_star["y_cmb"],
-        #         encoder_out=encoder_out,
-        #     )
-        #     tok_out, _ = model.decoder.forward_tok(
-        #         normalize=True,
-        #         prev_output_tokens=res_star["y_tok"],
-        #         encoder_out=encoder_out,
-        #     )
-        # cpt_del += (del_out[res_star["del_mask"]].argmax(-1) == res_star["del_tgt"][res_star["del_mask"]]).sum().item()
-        # cpt_plh += (plh_out[res_star["plh_mask"]].argmax(-1) == res_star["plh_tgt"][res_star["plh_mask"]]).sum().item()
-        # # print(cmb_out.transpose(1, 2)[res_star["cmb_mask"]].shape)
-        # # print(res_star["cmb_tgt"][res_star["cmb_mask"]].shape)
-        # cpt_cmb += (cmb_out.transpose(1, 2)[res_star["cmb_mask"]].argmax(-1) == res_star["cmb_tgt"][res_star["cmb_mask"]]).sum().item()
-        # cpt_tok += (tok_out[res_star["tok_mask"]].argmax(-1) == res_star["tok_tgt"][res_star["tok_mask"]]).sum().item()
-        # cpt_del_zeros += (
-        #     del_out[res_star["del_mask"] & (res_star["del_tgt"] == 0)].argmax(-1) 
-        #     == res_star["del_tgt"][res_star["del_mask"] & (res_star["del_tgt"] == 0)]
-        # ).sum().item()
-        # cpt_plh_non_zeros += (
-        #     plh_out[res_star["plh_mask"] & (res_star["plh_tgt"].ne(0))].argmax(-1) 
-        #     == res_star["plh_tgt"][res_star["plh_mask"] & (res_star["plh_tgt"].ne(0))]
-        # ).sum().item()
+    #     # with torch.no_grad():
+    #     #     encoder_out = model.encoder(x, src_lengths=src_lengths)
+    #     #     del_out, _ = model.decoder.forward_del(
+    #     #         normalize=True,
+    #     #         prev_output_tokens=y_init_star,
+    #     #         encoder_out=encoder_out,
+    #     #     )
+    #     #     plh_out, _ = model.decoder.forward_plh(
+    #     #         normalize=True,
+    #     #         prev_output_tokens=res_star["y_plh"],
+    #     #         encoder_out=encoder_out,
+    #     #     )
+    #     #     cmb_out, _ = model.decoder.forward_cmb(
+    #     #         normalize=True,
+    #     #         prev_output_tokens=res_star["y_cmb"],
+    #     #         encoder_out=encoder_out,
+    #     #     )
+    #     #     tok_out, _ = model.decoder.forward_tok(
+    #     #         normalize=True,
+    #     #         prev_output_tokens=res_star["y_tok"],
+    #     #         encoder_out=encoder_out,
+    #     #     )
+    #     # cpt_del += (del_out[res_star["del_mask"]].argmax(-1) == res_star["del_tgt"][res_star["del_mask"]]).sum().item()
+    #     # cpt_plh += (plh_out[res_star["plh_mask"]].argmax(-1) == res_star["plh_tgt"][res_star["plh_mask"]]).sum().item()
+    #     # # print(cmb_out.transpose(1, 2)[res_star["cmb_mask"]].shape)
+    #     # # print(res_star["cmb_tgt"][res_star["cmb_mask"]].shape)
+    #     # cpt_cmb += (cmb_out.transpose(1, 2)[res_star["cmb_mask"]].argmax(-1) == res_star["cmb_tgt"][res_star["cmb_mask"]]).sum().item()
+    #     # cpt_tok += (tok_out[res_star["tok_mask"]].argmax(-1) == res_star["tok_tgt"][res_star["tok_mask"]]).sum().item()
+    #     # cpt_del_zeros += (
+    #     #     del_out[res_star["del_mask"] & (res_star["del_tgt"] == 0)].argmax(-1) 
+    #     #     == res_star["del_tgt"][res_star["del_mask"] & (res_star["del_tgt"] == 0)]
+    #     # ).sum().item()
+    #     # cpt_plh_non_zeros += (
+    #     #     plh_out[res_star["plh_mask"] & (res_star["plh_tgt"].ne(0))].argmax(-1) 
+    #     #     == res_star["plh_tgt"][res_star["plh_mask"] & (res_star["plh_tgt"].ne(0))]
+    #     # ).sum().item()
 
-        # tot_del += res_star["del_mask"].sum().item()
-        # tot_plh += res_star["plh_mask"].sum().item()
-        # tot_cmb += res_star["cmb_mask"].sum().item()
-        # tot_tok += res_star["tok_mask"].sum().item()
-        # tot_del_zeros += (res_star["del_mask"] & (res_star["del_tgt"] == 0)).sum().item()
-        # tot_plh_non_zeros += (res_star["plh_mask"] & (res_star["plh_tgt"].ne(0))).sum().item()
+    #     # tot_del += res_star["del_mask"].sum().item()
+    #     # tot_plh += res_star["plh_mask"].sum().item()
+    #     # tot_cmb += res_star["cmb_mask"].sum().item()
+    #     # tot_tok += res_star["tok_mask"].sum().item()
+    #     # tot_del_zeros += (res_star["del_mask"] & (res_star["del_tgt"] == 0)).sum().item()
+    #     # tot_plh_non_zeros += (res_star["plh_mask"] & (res_star["plh_tgt"].ne(0))).sum().item()
 
-    print()
-    print("del_acc", cpt_del / tot_del, tot_del)
-    print("plh_acc", cpt_plh / tot_plh, tot_plh)
-    print("cmb_acc", cpt_cmb / tot_cmb, tot_cmb)
-    print("tok_acc", cpt_tok / tot_tok, tot_tok)
-    print("del_acc_zeros", cpt_del_zeros / tot_del_zeros, tot_del_zeros)
-    print("plh_acc_non_zeros", cpt_plh_non_zeros / tot_plh_non_zeros, tot_plh_non_zeros)
+    # print()
+    # print("del_acc", cpt_del / tot_del, tot_del)
+    # print("plh_acc", cpt_plh / tot_plh, tot_plh)
+    # print("cmb_acc", cpt_cmb / tot_cmb, tot_cmb)
+    # print("tok_acc", cpt_tok / tot_tok, tot_tok)
+    # print("del_acc_zeros", cpt_del_zeros / tot_del_zeros, tot_del_zeros)
+    # print("plh_acc_non_zeros", cpt_plh_non_zeros / tot_plh_non_zeros, tot_plh_non_zeros)
 
-    # batch = next(data_iter)
+    # # batch = next(data_iter)
 
-    # print(batch)
+    # # print(batch)
 
 
     # # source, multi_source (list), target

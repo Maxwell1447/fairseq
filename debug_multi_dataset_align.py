@@ -1,4 +1,5 @@
 import sys
+import time
 import torch
 
 from fairseq.tasks.translation_multi_lev import load_lang_multi_dataset
@@ -91,6 +92,18 @@ def regularize_shapes(x, ys, y):
     X[:, 1:-1, : ys.size(-1)] = ys
 
     return X[:, 0, :], X[:, 1:-1, :], X[:, -1, :]
+
+
+def regularize_shape_multi(ys):
+    # ys: list of (L_i,)
+    M = max([len(y) for y in ys])
+    N = len(ys)
+    shape = (N, M)
+    Y = ys[0].new(*shape).fill_(tgt_dict.pad())
+    for n in range(N):
+        Y[n, :len(ys[n])] = ys[n]
+
+    return Y
 
 
 def compute_loss(
@@ -191,7 +204,7 @@ def forward_loss(outputs):
 
     return loss
 
-def test_artificial_align(sample_=None):
+def test_artificial_align(sample_=None, k=1, max_valency=1):
 
     def get_mask_from_prob(bsz, p):
         return torch.rand(bsz) > p
@@ -208,13 +221,13 @@ def test_artificial_align(sample_=None):
     
     if sample_ is None:
         sample = dict()
-        # sample["multi_source"] = torch.tensor([[0, 7, 9, 6, 4, 2, 1], [0, 9, 7, 6, 4, 9, 2]], dtype=torch.int64).unsqueeze(0)
-        # sample["target"] = torch.tensor([[0, 7, 4, 5, 6, 2, 1]], dtype=torch.int64)
-        sample["multi_source"] = torch.tensor([[0, 9, 5, 6, 9, 2, 1], [0, 4, 6, 9, 9, 9, 2]], dtype=torch.int64).unsqueeze(0)
-        sample["target"] = torch.tensor([[0, 4, 5, 6, 10, 10, 2]], dtype=torch.int64)
+        sample["multi_source"] = torch.tensor([[0, 7, 9, 6, 4, 2, 1], [0, 9, 7, 6, 4, 9, 2]], dtype=torch.int64).unsqueeze(0)
+        sample["target"] = torch.tensor([[0, 7, 4, 5, 6, 2, 1]], dtype=torch.int64)
+        sample["multi_source"] = torch.randint(5, 15, size=(2, 40), dtype=torch.int64).unsqueeze(0)
+        sample["target"] = torch.randint(5, 15, size=(1, 40), dtype=torch.int64)
     else:
         sample = sample_
-        sample["multi_source"] = sample["multi_source"][0].unsqueeze(0).unsqueeze(0)
+        sample["multi_source"] = regularize_shape_multi(sample["multi_source"]).unsqueeze(0)
         sample["target"] = sample["target"].unsqueeze(0)
         _, sample["multi_source"], sample["target"] = regularize_shapes(sample["target"], sample["multi_source"], sample["target"])
         # print(sample["multi_source"].shape)
@@ -227,14 +240,22 @@ def test_artificial_align(sample_=None):
     y_init_star, tgt_tokens = sample["multi_source"], sample["target"] 
     
     mask_star = get_mask_from_prob(y_init_star.size(0), 0.2 * 0)
+    t1 = time.time()
     res_star = pi_star(
         sample["multi_source"][mask_star],
         sample["target"][mask_star],
+        k=k,
+        max_valency=max_valency,
         pad_symbol=tgt_dict.pad(),
         plh_symbol=tgt_dict.unk(),
         Kmax=64,
         device="cpu",
     )
+    t2 = time.time()
+    cov = (1 - (res_star["y_tok"] == tgt_dict.unk()).sum() / res_star["y_tok"].ne(tgt_dict.pad()).sum()).item()
+
+    return (t2 - t1), cov
+    print("execution time = ", t2 - t1)
     res_del = pi_del(
         y_init_star[~mask_star].shape,
         tgt_tokens[~mask_star],
@@ -276,8 +297,8 @@ def test_artificial_align(sample_=None):
     #     eos_symbol=2,
     #     device=tok_mask.device
     # )
-    y_cmb[0, 0, 1] = 11
-    y_cmb[0, 1, 4] = 11
+    # y_cmb[0, 0, 1] = 11
+    # y_cmb[0, 1, 4] = 11
 
     # cmb_tgt = handle_all_plh_case(cmb_tgt, y_tok, 3)
     msk_cmb_sel = ((y_tok == 3) & (~(y_cmb == 3).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == 3)
@@ -319,7 +340,7 @@ def test_artificial_align(sample_=None):
     # forward_loss(for_loss)
 
 lmd = load_lang_multi_dataset(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin-noised",
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin-fr-en",
     "train",
     "fr",
     src_dict,
@@ -336,9 +357,24 @@ lmd = load_lang_multi_dataset(
     prepend_bos=True,
 )
 
-test_artificial_align()
-# for i in tqdm(range(len(lmd))):
-#     test_artificial_align(lmd[i])
+for max_valency in [1, 5, 10, -1]:
+    for k in [1]:
+        # test_artificial_align()
+        dts = list()
+        covs = list()
+        # k = 10
+        # max_valency = -1
+        print("k =", k, "; max_valency =", max_valency)
+        for i in tqdm(range(min(len(lmd), 6500))):
+            dt, cov = test_artificial_align(lmd[i], max_valency=max_valency, k=k)
+            dts.append(dt)
+            covs.append(cov)
+
+        dts = np.array(dts)
+        covs = np.array(covs)
+        print("total time:", dts.sum())
+        print("mean cov:  ", covs.mean())
+        print()
 
 # for i in range(78835):
 #     if (lmd[i]["target"] == 3).any():

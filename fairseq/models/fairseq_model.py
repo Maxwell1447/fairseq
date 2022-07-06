@@ -166,6 +166,8 @@ class BaseFairseqModel(nn.Module):
             else getattr(cfg.generation, "beam", 5)
         )
         kwargs["need_attn"] = getattr(cfg.generation, "print_alignment", False)
+        if kwargs["need_attn"] is None:
+            kwargs["need_attn"] = True
         if getattr(cfg.generation, "retain_dropout", False):
             kwargs["retain_dropout"] = cfg.generation.retain_dropout
             kwargs["retain_dropout_modules"] = cfg.generation.retain_dropout_modules

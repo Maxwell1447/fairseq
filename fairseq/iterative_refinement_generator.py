@@ -136,8 +136,10 @@ class IterativeRefinementGenerator(object):
         # initialize
         encoder_out = model.forward_encoder([src_tokens, src_lengths])
         if "multi_src_tokens" in sample["net_input"]:
+            print("multi source")
             prev_decoder_out = model.initialize_output_tokens(encoder_out, multi_src_tokens)
         else:
+            print("single source")
             prev_decoder_out = model.initialize_output_tokens(encoder_out, src_tokens)
 
         if self.beam_size > 1:
@@ -163,7 +165,11 @@ class IterativeRefinementGenerator(object):
         prev_output_tokens = prev_decoder_out.output_tokens.clone()
 
         if self.retain_history:
-            prev_decoder_out = prev_decoder_out._replace(history=[prev_output_tokens])
+            history = prev_decoder_out.history
+            if history is None:
+                history = list()
+            history.append(prev_output_tokens)
+            prev_decoder_out = prev_decoder_out._replace(history=history)
 
         finalized = [[] for _ in range(bsz)]
 
@@ -202,6 +208,7 @@ class IterativeRefinementGenerator(object):
             }
 
         for step in range(self.max_iter + 1):
+            print("iteration ", str(step))
 
             decoder_options = {
                 "eos_penalty": self.eos_penalty,
@@ -213,12 +220,14 @@ class IterativeRefinementGenerator(object):
                 max_step=self.max_iter + 1,
             )
 
+            print("prev tokens shapes <<<<", prev_decoder_out.output_tokens.shape)
             decoder_out = model.forward_decoder(
                 prev_decoder_out, encoder_out, **decoder_options
             )
+            print("decoder out shapes >>>>", decoder_out.output_tokens.shape, decoder_out.output_scores.shape)
             assert decoder_out.output_tokens.shape == decoder_out.output_scores.shape
 
-            if self.adaptive and not "multi_src_tokens" in sample["net_input"]:
+            if self.adaptive and prev_output_tokens.dim() == 2:
                 # terminate if there is a loop
                 terminated, out_tokens, out_scores, out_attn = is_a_loop(
                     prev_output_tokens,
@@ -238,7 +247,7 @@ class IterativeRefinementGenerator(object):
                     decoder_out.output_tokens.size(0)
                 ).bool()
 
-            if step == self.max_iter or "multi_src_tokens" in sample["net_input"]:  # reach last iteration, terminate
+            if step == self.max_iter:  # reach last iteration, terminate
                 terminated.fill_(1)
 
             # collect finalized sentences
@@ -275,7 +284,7 @@ class IterativeRefinementGenerator(object):
                         )
 
             # check if all terminated
-            if terminated.sum() == terminated.size(0) or "multi_src_tokens" in sample["net_input"]:
+            if terminated.sum() == terminated.size(0):
                 break
 
             # for next step
@@ -297,6 +306,7 @@ class IterativeRefinementGenerator(object):
             prev_output_tokens = prev_decoder_out.output_tokens.clone()
 
         if self.beam_size > 1:
+            print("beam size > 1")
             if reranker is not None:
                 finalized = self.rerank(
                     reranker, finalized, [src_tokens, src_lengths], self.beam_size

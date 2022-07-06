@@ -175,14 +175,14 @@ def pi_mask(
 
 
 def pi_star(
-    y_del, y_star, k=10, pad_symbol=None, plh_symbol=None, Kmax=100, device="cuda:0"
+    y_del, y_star, k=10, max_valency=-1, pad_symbol=None, plh_symbol=None, Kmax=100, device="cuda:0"
 ):
     """Quasi optimal operations and states to edit y_del to y_star"""
     # y_del : B x N x M
     # y_star : B x M
     if y_del.size(1) == 1:
         k = 1
-    ops = libnat2.MultiLevEditOps(y_del.cpu(), y_star.cpu(), k, pad_symbol, plh_symbol)
+    ops = libnat2.MultiLevEditOps(y_del.cpu(), y_star.cpu(), k, max_valency, pad_symbol, plh_symbol)
 
     cmb_tgt = ops.get_cmb().to(device)
     y_tok = ops.get_s_cmb().to(device)
@@ -213,7 +213,7 @@ def handle_all_plh_case(cmb_tgt, y_tok, y_cmb, plh_symbol):
     return cmb_tgt
 
 
-def apply_del(in_tokens, word_del_pred, padding_idx, bos_idx, eos_idx):
+def apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx, eos_idx):
     # word_del_pred: B x N x M in {False, True}
     # apply deletion to a tensor
     in_masks = in_tokens.ne(padding_idx)
@@ -229,10 +229,20 @@ def apply_del(in_tokens, word_del_pred, padding_idx, bos_idx, eos_idx):
 
     out_tokens = in_tokens.masked_fill(word_del_pred, padding_idx).gather(2, reordering)
 
-    return out_tokens
+    out_scores = None
+    if in_scores is not None:
+        out_scores = in_scores.masked_fill(word_del_pred, 0).gather(2, reordering)
+
+    out_attn = None
+    if in_attn is not None:
+        _mask = word_del_pred[:, :, :, None].expand_as(in_attn)
+        _reordering = reordering[:, :, :, None].expand_as(in_attn)
+        out_attn = in_attn.masked_fill(_mask, 0.0).gather(2, _reordering)
+
+    return out_tokens, out_scores, out_attn
 
 
-def apply_plh(in_tokens, plh_pred, padding_idx, unk_idx, eos_idx):
+def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx):
     # plh_pred: B x N x M in {0, 1, ..., K_max - 1}
     # print("in tokens shape =", in_tokens.shape)
     # print("plh_pred shape  =", plh_pred.shape )
@@ -264,12 +274,19 @@ def apply_plh(in_tokens, plh_pred, padding_idx, unk_idx, eos_idx):
     # print(reordering.max(), out_lengths.max())
     out_tokens[:, :, :].scatter_(2, reordering, in_tokens[:, :, 1:])
 
+    out_scores = None
+    if in_scores is not None:
+        in_scores.masked_fill_(~in_masks, 0)
+        out_scores = in_scores.new_zeros(*out_tokens.size())
+        out_scores[:, :, 0] = in_scores[:, :, 0]
+        out_scores.scatter_(2, reordering, in_scores[:, :, 1:])
+
     # print("out toks", out_tokens[1].squeeze().cpu().numpy())
 
-    return out_tokens
+    return out_tokens, out_scores
 
 
-def apply_cmb(in_tokens, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx):
+def apply_cmb(in_tokens, in_scores, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx):
     # combine choice
     # cmb_pred: B x M x N in [0, 1] (float!)
     # in_tokens: B x N x M
@@ -299,15 +316,32 @@ def apply_cmb(in_tokens, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx):
 
     out_tokens[out_masks] = chosen[out_masks]
 
-    return out_tokens
+    out_scores = None
+    if in_scores is not None:
+        out_scores = torch.full(
+            (in_tokens.size(0), in_tokens.size(2)),
+            0.,
+            device=in_tokens.device,
+            dtype=in_scores.dtype
+        )
+        chosen_score = in_scores.transpose(1, 2)[idx1, idx2, cmb_pred]
+        out_scores[out_masks] = chosen_score[out_masks]
+
+    return out_tokens, out_scores
 
 
-def apply_tok(in_tokens, tok_pred, unk_idx):
+def apply_tok(in_tokens, in_scores, tok_pred, tok_scores, unk_idx):
     tok_masks = in_tokens.eq(unk_idx)
-    print(tok_pred[tok_masks])
     out_tokens = in_tokens.masked_scatter(tok_masks, tok_pred[tok_masks])
 
-    return out_tokens
+    if in_scores is not None:
+        out_scores = in_scores.masked_scatter(
+            tok_masks, tok_scores[tok_masks]
+        )
+    else:
+        out_scores = None
+
+    return out_tokens, out_scores
 
 
 def _skip(x, mask):
@@ -351,7 +385,7 @@ def _fill(x, mask, y, padding_idx):
     if x is None:
         return y
     assert x.dim() == y.dim() and mask.size(0) == x.size(0)
-    assert x.dim() == 2 or x.dim() == 3
+    assert x.dim() == 2 or x.dim() == 3 or (x.dim() == 4 and x.size(3) == y.size(3))
     n_selected = mask.sum()
     assert n_selected == y.size(0)
 

@@ -10,6 +10,7 @@
 #include <memory>
 #include <unordered_map>
 #include <thread>
+#include <limits.h>
 #include "edit_dist.h"
 
 using namespace std;
@@ -159,7 +160,7 @@ void printGraph(list<Edge> graph)
   cout << "\n";
 };
 
-vector<Node> buildDAGFromGraph(vector<Edge> &graph)
+vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
 {
   vector<Node> dag = vector<Node>(graph.size() + 2, Node(0));
   // initialize dag
@@ -170,19 +171,22 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph)
   }
 
   // initialize with source
-  for (long i = 0; i < (long)graph.size(); ++i)
+  for (long i = 0; (i < (long)graph.size()) && (i < max_valency); ++i)
   {
     dag.at(0).addNext(&dag.at(i + 1));
     dag.at(i + 1).addPrec(&dag.at(0));
   }
 
   // build DAG core
+  long current_valency;
   for (long i = 0; i < (long)graph.size(); ++i)
   {
-    for (long j = i + 1; j < (long)graph.size(); ++j)
+    current_valency = 0;
+    for (long j = i + 1; (j < (long)graph.size()) && (current_valency < max_valency); ++j)
     {
       if (((int)graph.at(i).x - (int)graph.at(j).x) * ((int)graph.at(i).y - (int)graph.at(j).y) > 0)
       {
+        current_valency++;
         dag.at(i + 1).addNext(&dag.at(j + 1));
         dag.at(j + 1).addPrec(&dag.at(i + 1));
       }
@@ -375,7 +379,7 @@ vector<list<vector<long>>> graphToIndexation(vector<list<long>> &paths, vector<E
   return out;
 };
 
-vector<list<vector<long>>> kBestGraphs(list<Edge> graph, const long &k)
+vector<list<vector<long>>> kBestGraphs(list<Edge> graph, const long &k, const long &max_valency)
 {
   vector<list<vector<long>>> k_best;
 
@@ -385,7 +389,7 @@ vector<list<vector<long>>> kBestGraphs(list<Edge> graph, const long &k)
     graph_vec.push_back(e);
   }
 
-  vector<Node> dag = buildDAGFromGraph(graph_vec);
+  vector<Node> dag = buildDAGFromGraph(graph_vec, max_valency);
   long table[dag.size() * k * 2] = {0};
   forwardKBest(dag, k, table);
   vector<list<long>> paths = backwardKBest(table, k, dag.size());
@@ -480,7 +484,7 @@ void recursiveCoverSearch(
 void getOpsFromSingle(
     const long *s_i, const long *s_ref,
     const long s_i_len, const long s_ref_len,
-    const long &n, const long &k,
+    const long &n, const long &k, const long &max_valency,
     long *del, long *ins, long *cmb,
     long *s_del, long *s_plh, long *s_cmb,
     const long &pad, const long &unk)
@@ -495,7 +499,7 @@ void getOpsFromSingle(
 
     graph.sort();
 
-    all_indexations.at(i) = kBestGraphs(graph, k);
+    all_indexations.at(i) = kBestGraphs(graph, k, max_valency);
 
     bool out[all_indexations.at(i).size() * 2 * seq_len] = {false};
     indexationMask(all_indexations.at(i), seq_len, out);
@@ -562,6 +566,7 @@ void getOpsFromBatch(
     const long &bsz,
     const long &n,
     const long &k,
+    const long &max_valency,
     long *del,
     long *ins,
     long *cmb,
@@ -584,6 +589,7 @@ void getOpsFromBatch(
         s_ref_len,
         n,
         k,
+        max_valency,
         &del[b * n * seq_len],
         &ins[b * n * (seq_len - 1)],
         &cmb[b * n * seq_len],
@@ -620,11 +626,14 @@ public:
   EditOpsBatch(){};
   EditOpsBatch(
       torch::Tensor s_i, torch::Tensor s_ref,
-      long k_, long pad, long unk)
+      long k_, long max_valency, long pad, long unk)
   {
     bsz = s_i.size(0);
     n = s_i.size(1);
     k = k_;
+    if (max_valency <= 0) {
+      max_valency = LONG_MAX;
+    }
     s_i_len = s_i.size(2);
     s_ref_len = s_ref.size(1);
     long seq_len = max(s_i_len, s_ref_len);
@@ -647,6 +656,7 @@ public:
         bsz,
         n,
         k,
+        max_valency,
         del.data_ptr<long>(),
         ins.data_ptr<long>(),
         cmb.data_ptr<long>(),
@@ -666,7 +676,7 @@ public:
 PYBIND11_MODULE(libnat2, m)
 {
   py::class_<EditOpsBatch>(m, "MultiLevEditOps")
-      .def(py::init<torch::Tensor, torch::Tensor, long, long, long>())
+      .def(py::init<torch::Tensor, torch::Tensor, long, long, long, long>())
       .def(py::init<>())
       .def("get_del", &EditOpsBatch::getDel)
       .def("get_ins", &EditOpsBatch::getIns)
