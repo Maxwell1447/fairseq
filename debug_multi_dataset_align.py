@@ -18,10 +18,10 @@ from fairseq.criterions.nat_loss import LabelSmoothedDualImitationCriterion
 # )
 
 src_dict = Dictionary.load(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin-noised/dict.fr.txt"
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin/dict.fr.txt"
 )
 tgt_dict = Dictionary.load(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin-noised/dict.en.txt"
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin/dict.en.txt"
 )
 
 
@@ -79,19 +79,18 @@ def get_batch_iter(
     return epoch_iter
 
 
-def regularize_shapes(x, ys, y):
+def regularize_shapes(ys, y):
     # print("yyys", ys)
     # print("y")
-    bsz = x.size(0)
-    M = max(x.size(-1), ys.size(-1), y.size(-1))
+    bsz = y.size(0)
+    M = max(ys.size(-1), y.size(-1))
     N = ys.size(1)
-    shape = (bsz, N + 2, M)
-    X = x.new(*shape).fill_(tgt_dict.pad())
-    X[:, 0, : x.size(-1)] = x
+    shape = (bsz, N + 1, M)
+    X = y.new(*shape).fill_(tgt_dict.pad())
     X[:, -1, : y.size(-1)] = y
-    X[:, 1:-1, : ys.size(-1)] = ys
+    X[:, :-1, : ys.size(-1)] = ys
 
-    return X[:, 0, :], X[:, 1:-1, :], X[:, -1, :]
+    return X[:, :-1, :], X[:, -1, :]
 
 
 def regularize_shape_multi(ys):
@@ -229,7 +228,8 @@ def test_artificial_align(sample_=None, k=1, max_valency=1):
         sample = sample_
         sample["multi_source"] = regularize_shape_multi(sample["multi_source"]).unsqueeze(0)
         sample["target"] = sample["target"].unsqueeze(0)
-        _, sample["multi_source"], sample["target"] = regularize_shapes(sample["target"], sample["multi_source"], sample["target"])
+        sample["multi_source"], sample["target"] = regularize_shapes(sample["multi_source"], sample["target"])
+        # print(sample)
         # print(sample["multi_source"].shape)
         # print("(T)  >>>", tgt_dict.string(sample_extreme["target"]))
         # print("(S)  >>>", tgt_dict.string(sample_extreme["source"]))
@@ -252,6 +252,10 @@ def test_artificial_align(sample_=None, k=1, max_valency=1):
         device="cpu",
     )
     t2 = time.time()
+    # mask_debug = ~((res_star["y_cmb"] == 2).sum(-1).sum(-1) == res_star["y_cmb"].size(1))
+    # print(mask_debug)
+    print(res_star["del_tgt"])
+    print(res_star["y_plh"])
     cov = (1 - (res_star["y_tok"] == tgt_dict.unk()).sum() / res_star["y_tok"].ne(tgt_dict.pad()).sum()).item()
 
     return (t2 - t1), cov
@@ -340,7 +344,7 @@ def test_artificial_align(sample_=None, k=1, max_valency=1):
     # forward_loss(for_loss)
 
 lmd = load_lang_multi_dataset(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin-fr-en",
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin",
     "train",
     "fr",
     src_dict,
@@ -357,24 +361,27 @@ lmd = load_lang_multi_dataset(
     prepend_bos=True,
 )
 
-for max_valency in [1, 5, 10, -1]:
-    for k in [1]:
-        # test_artificial_align()
-        dts = list()
-        covs = list()
-        # k = 10
-        # max_valency = -1
-        print("k =", k, "; max_valency =", max_valency)
-        for i in tqdm(range(min(len(lmd), 6500))):
-            dt, cov = test_artificial_align(lmd[i], max_valency=max_valency, k=k)
-            dts.append(dt)
-            covs.append(cov)
+# print(lmd[162264])
+dt, cov = test_artificial_align(sample_=lmd[162264], max_valency=1, k=1)
 
-        dts = np.array(dts)
-        covs = np.array(covs)
-        print("total time:", dts.sum())
-        print("mean cov:  ", covs.mean())
-        print()
+# for max_valency in [1, 5, 10, -1]:
+#     for k in [1]:
+#         # test_artificial_align()
+#         dts = list()
+#         covs = list()
+#         # k = 10
+#         # max_valency = -1
+#         print("k =", k, "; max_valency =", max_valency)
+#         for i in tqdm(range(min(len(lmd), 6500))):
+#             dt, cov = test_artificial_align(lmd[i], max_valency=max_valency, k=k)
+#             dts.append(dt)
+#             covs.append(cov)
+
+#         dts = np.array(dts)
+#         covs = np.array(covs)
+#         print("total time:", dts.sum())
+#         print("mean cov:  ", covs.mean())
+#         print()
 
 # for i in range(78835):
 #     if (lmd[i]["target"] == 3).any():
@@ -401,8 +408,8 @@ for max_valency in [1, 5, 10, -1]:
 #     y_init_star = sample["net_input"]["multi_src_tokens"]
 #     # outputs = model(src_tokens, multi_src_tokens, tgt_tokens)
 
-#     x, y_init_star, tgt_tokens = regularize_shapes(
-#         x, y_init_star, tgt_tokens
+#     y_init_star, tgt_tokens = regularize_shapes(
+#         y_init_star, tgt_tokens
 #     )
 
 #     # print("batch", i, "  with", x.size(0), "elements")
@@ -467,8 +474,8 @@ for max_valency in [1, 5, 10, -1]:
 # # # tgt_ = torch.full((len(tgt) + 1,), tgt_dict.pad(), dtype=tgt.dtype, device=tgt.device)
 # # # tgt_[:-1] = tgt
 # # # tgt = tgt_
-# x, y_init_star, tgt_tokens = regularize_shapes(
-#     src.unsqueeze(0), multi_src, tgt.unsqueeze(0)
+# y_init_star, tgt_tokens = regularize_shapes(
+#     multi_src, tgt.unsqueeze(0)
 # )
 
 # # print("bos", tgt_dict.bos())

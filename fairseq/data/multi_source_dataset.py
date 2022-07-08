@@ -498,11 +498,13 @@ class LanguageMultiSourceDataset(FairseqDataset):
         sizes = self.src_sizes[indices]
         if self.tgt_sizes is not None:
             sizes = np.maximum(sizes, self.tgt_sizes[indices])
+            # sizes = sizes + self.tgt_sizes[indices]
         if self.multi_src_sizes is not None:
             multi_size = np.zeros_like(sizes)
             for single_size in self.multi_src_sizes:
                 multi_size = multi_size + single_size[indices]
             sizes = np.maximum(sizes, multi_size)
+            # sizes = sizes + multi_size
         return sizes
 
     def size(self, index):

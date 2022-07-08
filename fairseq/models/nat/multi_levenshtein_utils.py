@@ -128,7 +128,7 @@ def pi_sel(
     # y_refs : B x N x M
 
     assert y_cmb_star.shape == y_refs.shape, str(y_cmb_star.shape) + str(y_refs.shape)
-    assert ((y_cmb_star == eos_symbol).sum(-1) == 1).all(), ((y_cmb_star == bos_symbol).sum(-1) == 1).all()
+    assert ((y_cmb_star == eos_symbol).sum(-1) == 1).all().item(), ((y_cmb_star == bos_symbol).sum(-1) == 1).all().item()
 
     mask = (y_cmb_star == plh_symbol) * (
         torch.rand(y_cmb_star.shape, device=device) < gamma

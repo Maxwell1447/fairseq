@@ -476,7 +476,8 @@ class TranslationMultiLevenshteinTask(TranslationTask):
             beam_size=getattr(args, "decode_with_beam", 1),
             eos_penalty=getattr(args, "decode_eos_penalty", 0.0),
             max_ratio=getattr(args, "decode_max_ratio", None),
-            max_iter=1,
+            max_iter=getattr(args, "iter_decode_max_iter", 10),
+            retain_history=getattr(args, "retain_iter_history", False),
         )
 
     def build_dataset_for_inference(
@@ -507,54 +508,7 @@ class TranslationMultiLevenshteinTask(TranslationTask):
         model.train()
         # sample["prev_target"] = self.inject_noise(sample["target"])
         sample["prev_target"] = None
-
-        # print("update num", update_num, "\t >>>> ids", sample["id"].cpu().numpy())
-        # print("#################print sample[idxs]#######################")
-        # # print(sample)
-        # print(
-        #     "-----SRC LENS-----",
-        #     sample["net_input"]["src_tokens"]
-        #     .ne(self.src_dict.pad())
-        #     .sum(-1)
-        #     .cpu()
-        #     .numpy(),
-        # )
-        # print(
-        #     "-----TGT LENS-----",
-        #     sample["net_input"]["tgt_tokens"]
-        #     .ne(self.tgt_dict.pad())
-        #     .sum(-1)
-        #     .cpu()
-        #     .numpy(),
-        # )
-        # print("-----MULTI LENS-----", sample["net_input"]["multi_src_tokens"].shape)
-        # for i in range(sample["net_input"]["multi_src_tokens"].size(1)):
-        #     print(
-        #         i,
-        #         sample["net_input"]["multi_src_tokens"][:, i, :]
-        #         .ne(self.tgt_dict.pad())
-        #         .sum(-1)
-        #         .cpu()
-        #         .numpy(),
-        #     )
-
-        # idxs = [0]
-        # for i in idxs:
-        #     src = sample["net_input"]["src_tokens"][i]
-        #     tgt = sample["net_input"]["tgt_tokens"][i]
-        #     msrc = sample["net_input"]["multi_src_tokens"][i]
-        #     # print("src", src.ne(self.src_dict.pad()).sum().item(), len(src))
-        #     print(self.src_dict.string(src, None))
-        #     # print("tgt", src.ne(self.tgt_dict.pad()).sum().item(), len(tgt))
-        #     print(self.tgt_dict.string(tgt, None))
-        #     for n, ssrc in enumerate(msrc):
-        #         # print(
-        #         #     "multi src ",
-        #         #     str(n),
-        #         #     ssrc.ne(self.src_dict.pad()).sum().item(),
-        #         #     len(ssrc),
-        #         # )
-        #         print(self.tgt_dict.string(ssrc, None))
+        sample["num_iter"] = update_num
 
         loss, sample_size, logging_output = criterion(model, sample)
         if ignore_grad:
@@ -566,5 +520,6 @@ class TranslationMultiLevenshteinTask(TranslationTask):
         model.eval()
         with torch.no_grad():
             sample["prev_target"] = None
+            sample["num_iter"] = 0
             loss, sample_size, logging_output = criterion(model, sample)
         return loss, sample_size, logging_output

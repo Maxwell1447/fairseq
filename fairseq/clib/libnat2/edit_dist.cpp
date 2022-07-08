@@ -163,6 +163,15 @@ void printGraph(list<Edge> graph)
 vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
 {
   vector<Node> dag = vector<Node>(graph.size() + 2, Node(0));
+
+  // for (Edge const &edge : graph)
+  // {
+  //   edge.printEdge();
+  // }
+  // cout << endl;
+
+  // printGraph(graph); // print sorted graph of edges
+
   // initialize dag
   for (long i = 0; i < (long)graph.size() + 2; ++i)
   {
@@ -175,6 +184,7 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
   {
     dag.at(0).addNext(&dag.at(i + 1));
     dag.at(i + 1).addPrec(&dag.at(0));
+    // cout << "s" << "->" << i << endl;
   }
 
   // build DAG core
@@ -182,13 +192,18 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
   for (long i = 0; i < (long)graph.size(); ++i)
   {
     current_valency = 0;
-    for (long j = i + 1; (j < (long)graph.size()) && (current_valency < max_valency); ++j)
+    for (long j = i + 1; (j < (long)graph.size()) && (current_valency < max_valency) && dag.at(i + 1).hasPrec(); ++j)
     {
-      if (((int)graph.at(i).x - (int)graph.at(j).x) * ((int)graph.at(i).y - (int)graph.at(j).y) > 0)
+      // cout << i << "," << j << ": " << current_valency << "  | ";
+      if (
+        (((int)graph.at(i).x - (int)graph.at(j).x) * ((int)graph.at(i).y - (int)graph.at(j).y) > 0)
+        )
       {
+        // cout << endl;
         current_valency++;
         dag.at(i + 1).addNext(&dag.at(j + 1));
         dag.at(j + 1).addPrec(&dag.at(i + 1));
+        // cout << i << "->" << j << endl;
       }
     }
   }
@@ -196,10 +211,11 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
   // finalize with target
   for (long i = 0; i < (long)graph.size(); ++i)
   {
-    if (!dag.at(i + 1).hasNext())
+    if (!dag.at(i + 1).hasNext() && dag.at(i + 1).hasPrec())
     {
       dag.at(i + 1).addNext(&dag.at(graph.size() + 1));
       dag.at(graph.size() + 1).addPrec(&dag.at(i + 1));
+      // cout << i << "->" << "t" << endl;
     }
   }
 

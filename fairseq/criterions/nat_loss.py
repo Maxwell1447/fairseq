@@ -50,7 +50,7 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
             )
 
         if masks is not None:
-            print("+++++++++++", name)
+            # print("+++++++++++", name)
             # print("out", outputs.shape, outputs.device, outputs.dtype)
             # print("tgt", targets.shape, targets.device, targets.dtype)
             # print("masks", masks.shape, masks.device, masks.dtype)
@@ -70,17 +70,17 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
                 # print("logits", "min", logits.min(), "max", logits.max())
                 # print("targets", targets.shape, targets.dtype)
                 # print("targets", "min", targets.min(), "max", targets.max())
-                if name == "del-loss":
-                    select_zero = targets == 0
-                    print("pred  ", logits.argmax(-1)[select_zero][:20])
-                    print("target", targets[select_zero][:20])
-                elif name == "plh-loss":
-                    select_non_zero = targets.ne(0)
-                    print("pred  ", logits.argmax(-1)[select_non_zero][:20])
-                    print("target", targets[select_non_zero][:20])
-                else:
-                    print("pred  ", logits.argmax(-1)[:20])
-                    print("target", targets[:20])
+                # if name == "del-loss":
+                #     select_zero = targets == 0
+                #     print("pred  ", logits.argmax(-1)[select_zero][:20])
+                #     print("target", targets[select_zero][:20])
+                # elif name == "plh-loss":
+                #     select_non_zero = targets.ne(0)
+                #     print("pred  ", logits.argmax(-1)[select_non_zero][:20])
+                #     print("target", targets[select_non_zero][:20])
+                # else:
+                #     print("pred  ", logits.argmax(-1)[:20])
+                #     print("target", targets[:20])
                 losses = F.nll_loss(logits, targets.to(logits.device), reduction="none")
 
             else:  # soft-labels
@@ -119,7 +119,7 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
         tgt_tokens, prev_output_tokens = sample["target"], sample["prev_target"]
         if "multi_src_tokens" in sample["net_input"]:
             multi_src_tokens = sample["net_input"]["multi_src_tokens"]
-            outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens)
+            outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, sample["num_iter"], ids=sample["id"])
         else:
             outputs = model(src_tokens, src_lengths, prev_output_tokens, tgt_tokens)
         losses, nll_loss = [], []
