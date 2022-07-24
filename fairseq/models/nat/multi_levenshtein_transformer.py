@@ -344,9 +344,9 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             y_post_plh = res_post_del["y_plh"]
             post_plh_tgt = res_post_del["plh_tgt"]
             post_plh_mask = res_post_del["plh_mask"]
-           
+
             res_star = self.combine_res(res_star, res_del, mask_star)
-                
+
             del_tgt = res_star["del_tgt"]
             del_mask = res_star["del_mask"]
             plh_tgt = res_star["plh_tgt"]
@@ -381,7 +381,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 eos_symbol=self.eos,
                 device=src_tokens.device,
             )
-        
+
+
         del_out, _ = self.decoder.forward_del(
             normalize=False, prev_output_tokens=prev_output_tokens, encoder_out=encoder_out,
         )
@@ -983,17 +984,18 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
             # print("positions", positions)
 
             # change shape (batch x N x M x p) to (batch x NM x p)
-            positions = positions.view(
+            # print(positions.shape, prev_output_tokens.shape, self.embed_seq_num.embedding_dim)
+            positions = positions.reshape(
                 prev_output_tokens.size(0),
                 prev_output_tokens.size(1) * prev_output_tokens.size(2),
                 self.embed_seq_num.embedding_dim,
             )
-            seq_emb = seq_emb.view(
+            seq_emb = seq_emb.reshape(
                 prev_output_tokens.size(0),
                 prev_output_tokens.size(1) * prev_output_tokens.size(2),
                 self.embed_seq_num.embedding_dim,
             )
-            tok_emb = tok_emb.view(
+            tok_emb = tok_emb.reshape(
                 prev_output_tokens.size(0),
                 prev_output_tokens.size(1) * prev_output_tokens.size(2),
                 self.embed_seq_num.embedding_dim,

@@ -7,7 +7,10 @@ from fairseq.data import Dictionary
 from fairseq.models.nat import *
 from fairseq.data import FairseqDataset, data_utils, iterators
 from tqdm import tqdm
+from fairseq import options, tasks, checkpoint_utils
+from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from fairseq.criterions.nat_loss import LabelSmoothedDualImitationCriterion
+from fairseq.data.multi_source_dataset import collate
 
 
 # src_dict = Dictionary.load(
@@ -27,7 +30,7 @@ tgt_dict = Dictionary.load(
 
 def get_batch_iter(
     dataset,
-    max_tokens=4096,
+    max_tokens=2048,
     ignore_invalid_inputs=True,
     required_batch_size_multiple=1,
     seed=1,
@@ -52,7 +55,7 @@ def get_batch_iter(
     # filter examples that are too large
     if max_positions is not None:
         indices, _ = dataset.filter_indices_by_size(
-            indices, max_positions, max_acceptable_retrieved_ratio=1.2
+            indices, max_positions, max_acceptable_retrieved_ratio=10.0
         )
 
     # create mini-batches with given size constraints
@@ -103,6 +106,56 @@ def regularize_shape_multi(ys):
         Y[n, :len(ys[n])] = ys[n]
 
     return Y
+
+
+
+def load_model():
+    from fairseq import models
+    import argparse
+    import ast
+    parser = options.get_generation_parser()
+    # print(parser)
+
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    # parser.add_argument("data", default="/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin-noised")
+    parser.add_argument("--arch", default="multi_levenshtein_transformer")
+    parser.add_argument("--task", default="multi_translation_lev")
+    # parser.add_argument("--num-retrieved", default=1, type=int)
+    parser.add_argument("--criterion", default="nat_loss")
+    parser.add_argument("--ddp-backend", default="legacy_ddp")
+    parser.add_argument("--batch-size", default=1, type=int)
+    # parser.add_argument("--max-valency", default=5, type=int)
+    # parser.add_argument("--share-all-embedding", action="store_true")
+    # parser.add_argument("--dropout", default=0.3, type=float)
+    parser.add_argument(
+        "--path", 
+        default="/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/models-small/transformer-multi-lev-fr-en-ecb-3NN/checkpoint_last.pt"
+    )
+    args = options.parse_args_and_arch(parser)
+    cfg = convert_namespace_to_omegaconf(args)
+    # print(args)
+    # print(cfg)
+    # print(cfg.keys())
+    task = tasks.setup_task(cfg.task)
+    # model = task.build_model(cfg.model)
+
+    overrides = ast.literal_eval(cfg.common_eval.model_overrides)
+    models, saved_cfg = checkpoint_utils.load_model_ensemble(
+        utils.split_paths(cfg.common_eval.path),
+        arg_overrides=overrides,
+        task=task,
+        suffix=cfg.checkpoint.checkpoint_suffix,
+        strict=(cfg.checkpoint.checkpoint_shard_count == 1),
+        num_shards=cfg.checkpoint.checkpoint_shard_count,
+    )
+
+    # criterion = LabelSmoothedDualImitationCriterion(task, 0.1)
+
+    # print(overrides)
+
+    # model = models.build_model(cfg.model, task)
+    # print(len(models))
+    return models[0] #, criterion
 
 
 def compute_loss(
@@ -350,7 +403,7 @@ lmd = load_lang_multi_dataset(
     src_dict,
     "en",
     tgt_dict,
-    1,
+    3,
     True,
     "mmap",
     -1,
@@ -361,8 +414,9 @@ lmd = load_lang_multi_dataset(
     prepend_bos=True,
 )
 
+# 139552, 154425
 # print(lmd[162264])
-dt, cov = test_artificial_align(sample_=lmd[162264], max_valency=1, k=1)
+# dt, cov = test_artificial_align(sample_=lmd[154425], max_valency=1, k=1)
 
 # for max_valency in [1, 5, 10, -1]:
 #     for k in [1]:
@@ -395,39 +449,98 @@ dt, cov = test_artificial_align(sample_=lmd[162264], max_valency=1, k=1)
 # print("(S)  >>>", tgt_dict.string(sample_extreme["source"]))
 # print("(S1) >>>", tgt_dict.string(sample_extreme["multi_source"][0]))
 
-
+device = "cuda"
+device = "cpu"
+model = load_model()
+model.max_valency = 2
+model = model.to(device)
 # iterator_3000 = get_batch_iter(lmd)
 # data_iter = iterator_3000.next_epoch_itr(shuffle=False)
 # print(len(data_iter))
-# for i, sample in enumerate(data_iter):
+# for i, sample in tqdm(enumerate(data_iter)):
 
-#     print(str(i), end="\r")
+#     if i == 13074:
+#         # continue
+
     
-#     x = sample["net_input"]["src_tokens"]
-#     tgt_tokens = sample["target"]
-#     y_init_star = sample["net_input"]["multi_src_tokens"]
-#     # outputs = model(src_tokens, multi_src_tokens, tgt_tokens)
+#         print(str(i))
+#         print(sample["id"])
+#         print(sample)
 
-#     y_init_star, tgt_tokens = regularize_shapes(
-#         y_init_star, tgt_tokens
-#     )
-
-#     # print("batch", i, "  with", x.size(0), "elements")
-
-#     if i >= 0:
-#         # print(sample["id"].cpu().numpy())
-
-#         res = pi_star(
-#             y_init_star,
-#             tgt_tokens,
-#             pad_symbol=tgt_dict.pad(),
-#             plh_symbol=tgt_dict.unk(),
-#             Kmax=50,
-#             device=x.device,
+#         # B x L
+#         src_tokens, src_lengths = (
+#             sample["net_input"]["src_tokens"].to(device),
+#             sample["net_input"]["src_lengths"].to(device),
 #         )
-#         # break
+#         sample["num_iter"] = i
+#         tgt_tokens = sample["target"].to(device)
+#         multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
+#         outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, i, ids=sample["id"])
+    
+    # x = sample["net_input"]["src_tokens"]
+    # tgt_tokens = sample["target"]
+    # y_init_star = sample["net_input"]["multi_src_tokens"]
+    # # outputs = model(src_tokens, multi_src_tokens, tgt_tokens)
 
+    # y_init_star, tgt_tokens = regularize_shapes(
+    #     y_init_star, tgt_tokens
+    # )
 
+    # # print("batch", i, "  with", x.size(0), "elements")
+
+    # if i >= 0:
+    #     # print(sample["id"].cpu().numpy())
+
+    #     res = pi_star(
+    #         y_init_star,
+    #         tgt_tokens,
+    #         pad_symbol=tgt_dict.pad(),
+    #         plh_symbol=tgt_dict.unk(),
+    #         Kmax=50,
+    #         max_valency=10,
+    #         device=x.device,
+    #     )
+    #     # break
+
+model.full_mlevt = True
+# sample = [lmd[154425], lmd[139552]] #, 154425 139552
+sample = [lmd[154425]]
+# sample = [lmd[139552]]
+print(sample)
+sample = collate(
+    sample,
+    tgt_dict.pad(),
+    tgt_dict.eos(),
+    left_pad_source=True,
+    left_pad_target=False,
+    input_feeding=True,
+    pad_to_length=None,
+    pad_to_multiple=1,
+)
+print(sample.keys())
+src_tokens, src_lengths = (
+    sample["net_input"]["src_tokens"].to(device),
+    sample["net_input"]["src_lengths"].to(device),
+)
+sample["num_iter"] = 2
+tgt_tokens = sample["target"].to(device)
+multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
+# outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, sample["num_iter"], ids=sample["id"])
+
+multi_src_tokens, tgt_tokens = regularize_shapes(
+    multi_src_tokens, tgt_tokens
+)
+res = pi_star(
+    multi_src_tokens,
+    tgt_tokens,
+    pad_symbol=tgt_dict.pad(),
+    plh_symbol=tgt_dict.unk(),
+    Kmax=50,
+    max_valency=10,
+    device=src_tokens.device,
+)
+
+print(res)
 
 
 # batch = next(data_iter)

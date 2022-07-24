@@ -225,7 +225,7 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
 void insertPair(long *best_scores, long *element, const long &k)
 {
   long index = 1;
-  long temp[2];
+  long *temp = new long[2];
 
   if (best_scores[1] < element[1])
   {
@@ -278,12 +278,14 @@ vector<list<long>> backwardKBest(long *table, const long &k, const long &dag_siz
   }
   current.at(k - 1).path.push_back(dag_size - 1);
   current.at(k - 1).score = table[(dag_size - 1) * k * 2 + (k - 1) * 2 + 1];
-
   bool candidatesRemaining = true;
 
   long i = dag_size - 1;
+  cout << "enter loop" << endl;
   for (long num_iter = 0; candidatesRemaining && (num_iter < dag_size); ++num_iter)
   {
+    cout << "[";
+    cout.flush();
     candidates = {};
     for (long j = 0; j < k; ++j)
     {
@@ -292,6 +294,9 @@ vector<list<long>> backwardKBest(long *table, const long &k, const long &dag_siz
       {
         for (long m = 0; m < k; ++m)
         {
+          cout << i << "|" << k << "|" << m << "+";
+          cout.flush();
+
           if ((table[i * k * 2 + m * 2 + 0] + table[i * k * 2 + m * 2 + 1]) > 0)
           {
             candidates.push_back(Path(
@@ -306,6 +311,8 @@ vector<list<long>> backwardKBest(long *table, const long &k, const long &dag_siz
         }
       };
     }
+    cout << "";
+    cout.flush();
     candidates.sort();
     while (((long)candidates.size() < k) && (candidates.size() > 0))
     {
@@ -352,8 +359,10 @@ vector<list<long>> backwardKBest(long *table, const long &k, const long &dag_siz
     {
       candidatesRemaining = false;
     }
+    cout << "]";
+    cout.flush();
   }
-
+  cout << endl;
   for (long j = k; j > 0; --j)
   {
     for (
@@ -406,9 +415,15 @@ vector<list<vector<long>>> kBestGraphs(list<Edge> graph, const long &k, const lo
   }
 
   vector<Node> dag = buildDAGFromGraph(graph_vec, max_valency);
-  long table[dag.size() * k * 2] = {0};
+  const long dag_size = dag.size();
+
+  // vector<long> table_ = vector<long>(dag_size * k * 2, 0);
+  long *table = new long[dag_size * k * 2];
+  cout << "forward" << endl;
   forwardKBest(dag, k, table);
+  cout << "backward" << endl;
   vector<list<long>> paths = backwardKBest(table, k, dag.size());
+  cout << "indexation" << endl;
   k_best = graphToIndexation(paths, graph_vec);
 
   return k_best;
@@ -506,18 +521,23 @@ void getOpsFromSingle(
     const long &pad, const long &unk)
 {
   const long seq_len = max(s_i_len, s_ref_len);
-  bool all_masked[n * k * 2 * seq_len];
+  bool *all_masked = new bool[n * k * 2 * seq_len];
   vector<vector<list<vector<long>>>> all_indexations = vector<vector<list<vector<long>>>>(n);
   vector<list<long>> filters = vector<list<long>>(n);
   for (long i = 0; i < n; ++i)
   {
-    list<Edge> graph = buildGraph(&s_i[i * s_i_len], s_ref, s_i_len, s_ref_len, pad);
 
+    list<Edge> graph = buildGraph(&s_i[i * s_i_len], s_ref, s_i_len, s_ref_len, pad);
     graph.sort();
 
+    cout << "k best graphs" << endl;
+
+    kBestGraphs(graph, k, max_valency);
     all_indexations.at(i) = kBestGraphs(graph, k, max_valency);
 
-    bool out[all_indexations.at(i).size() * 2 * seq_len] = {false};
+    bool *out = new bool[all_indexations.at(i).size() * 2 * seq_len];
+    cout << out[1] << endl;
+
     indexationMask(all_indexations.at(i), seq_len, out);
 
     for (long m = 0; m < (k * 2 * seq_len); ++m)
@@ -525,12 +545,13 @@ void getOpsFromSingle(
       all_masked[i * k * 2 * seq_len + m] = out[m];
     }
 
+    cout << "fitler redundancy" << endl;
     filters.at(i) = filterRedundancy(&all_masked[i * k * 2 * seq_len], k, seq_len);
   }
 
   long max_score = 0;
-  bool max_cover[seq_len] = {0};
-  bool current_cover[seq_len] = {0};
+  bool *max_cover = new bool[seq_len];
+  bool *current_cover = new bool[seq_len];
   vector<long> choices = vector<long>(n);
   recursiveCoverSearch(
       n, max_score, max_cover,
@@ -540,6 +561,7 @@ void getOpsFromSingle(
       list<long>(),
       current_cover,
       k, seq_len);
+
 
   long j;
   for (long l = 0; (l < s_ref_len) && (s_ref[l] != pad); ++l)
