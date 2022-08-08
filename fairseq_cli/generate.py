@@ -78,6 +78,15 @@ def _main(cfg: DictConfig, output_file):
 
     use_cuda = torch.cuda.is_available() and not cfg.common.cpu
 
+    if cfg.generation.formatted_file is not None and cfg.generation.formatted_file != "":
+        try:
+            with open(cfg.generation.formatted_file, 'w') as formatted_file:
+                formatted_file.write("")
+        except:
+            logger.warning(f"cfg.generation.formatted_file: {cfg.generation.formatted_file} is invalid.")
+            cfg.generation.formatted_file = None
+            
+
     # Load dataset splits
     task = tasks.setup_task(cfg.task)
 
@@ -271,6 +280,8 @@ def _main(cfg: DictConfig, output_file):
             src_str = decode_fn(src_str)
             if has_target:
                 target_str = decode_fn(target_str)
+            else:
+                target_str = None
             if multi_src_tokens is not None:
                 multi_src_str = [decode_fn(solo_str) for solo_str in multi_src_str]
 
@@ -357,19 +368,48 @@ def _main(cfg: DictConfig, output_file):
                         )
 
                     if cfg.generation.retain_iter_history:
+                        # print(len(hypo["history"]))
+                        # print("history >>> ", hypo["history"])
+                        # print(len(hypo["history_ops"]))
+                        # print("history ops >>>", hypo["history_ops"])
+                        if cfg.generation.formatted_file is not None and cfg.generation.formatted_file != "":
+                            utils.write_formatted_ops_and_stages(
+                                src_str,
+                                target_str,
+                                hypo["history"], 
+                                hypo["history_ops"],
+                                cfg.generation.formatted_file,
+                                tgt_dict,
+                            )
+
                         for step, h in enumerate(hypo["history"]):
-                            _, h_str, _ = utils.post_process_prediction(
-                                hypo_tokens=h["tokens"].int().cpu(),
-                                src_str=src_str,
-                                alignment=None,
-                                align_dict=None,
-                                tgt_dict=tgt_dict,
-                                remove_bpe=None,
-                            )
-                            print(
-                                "E-{}_{}\t{}".format(sample_id, step, h_str),
-                                file=output_file,
-                            )
+                            if h["tokens"].dim() > 1:
+                                for c in range(h["tokens"].size(0)):
+                                    _, h_str, _ = utils.post_process_prediction(
+                                        hypo_tokens=h["tokens"][c].int().cpu(),
+                                        src_str=src_str,
+                                        alignment=None,
+                                        align_dict=None,
+                                        tgt_dict=tgt_dict,
+                                        remove_bpe=None,
+                                    )
+                                    print(
+                                        "E-{}_{}_{}\t{}".format(sample_id, step, c, h_str),
+                                        file=output_file,
+                                    )
+                            else:
+                                _, h_str, _ = utils.post_process_prediction(
+                                    hypo_tokens=h["tokens"].int().cpu(),
+                                    src_str=src_str,
+                                    alignment=None,
+                                    align_dict=None,
+                                    tgt_dict=tgt_dict,
+                                    remove_bpe=None,
+                                )
+                                print(
+                                    "E-{}_{}\t{}".format(sample_id, step, h_str),
+                                    file=output_file,
+                                )
 
                 # Score only the top hypothesis
                 if has_target and j == 0:

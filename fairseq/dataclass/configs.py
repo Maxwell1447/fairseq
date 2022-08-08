@@ -831,6 +831,12 @@ class GenerationConfig(FairseqDataclass):
             "help": "if set, decoding returns the whole history of iterative refinement"
         },
     )
+    formatted_file: str = field(
+        default="",
+        metadata={
+            "help": "if set, save sentence edition formatted in this file"
+        },
+    )
     retain_dropout: bool = field(
         default=False, metadata={"help": "Use dropout at inference time"},
     )

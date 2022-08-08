@@ -256,7 +256,7 @@ def forward_loss(outputs):
 
     return loss
 
-def test_artificial_align(sample_=None, k=1, max_valency=1):
+def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
 
     def get_mask_from_prob(bsz, p):
         return torch.rand(bsz) > p
@@ -291,12 +291,14 @@ def test_artificial_align(sample_=None, k=1, max_valency=1):
     # print(sample["multi_source"].shape)
     # print(sample["target"].shape)
     y_init_star, tgt_tokens = sample["multi_source"], sample["target"] 
+
+    # print("y_init_star", y_init_star.tolist())
     
     mask_star = get_mask_from_prob(y_init_star.size(0), 0.2 * 0)
     t1 = time.time()
     res_star = pi_star(
-        sample["multi_source"][mask_star],
-        sample["target"][mask_star],
+        sample["multi_source"][mask_star].to(device),
+        sample["target"][mask_star].to(device),
         k=k,
         max_valency=max_valency,
         pad_symbol=tgt_dict.pad(),
@@ -307,8 +309,8 @@ def test_artificial_align(sample_=None, k=1, max_valency=1):
     t2 = time.time()
     # mask_debug = ~((res_star["y_cmb"] == 2).sum(-1).sum(-1) == res_star["y_cmb"].size(1))
     # print(mask_debug)
-    print(res_star["del_tgt"])
-    print(res_star["y_plh"])
+    # print("multi src", sample["multi_source"][mask_star].tolist())
+    print("y_cmb    ", res_star["y_cmb"].tolist())
     cov = (1 - (res_star["y_tok"] == tgt_dict.unk()).sum() / res_star["y_tok"].ne(tgt_dict.pad()).sum()).item()
 
     return (t2 - t1), cov
@@ -413,10 +415,51 @@ lmd = load_lang_multi_dataset(
     1024,
     prepend_bos=True,
 )
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # 139552, 154425
-# print(lmd[162264])
-# dt, cov = test_artificial_align(sample_=lmd[154425], max_valency=1, k=1)
+# 116611, 27889
+
+# sample = lmd[27889]
+
+# print(sample)
+
+# print("(S)  >>> ", src_dict.string(sample["source"], None))
+# print("(T)  >>> ", tgt_dict.string(sample["target"], None))
+# for i in range(3):
+#     print(f"(S{i}) >>> ", tgt_dict.string(sample["multi_source"][i], None))
+
+# dt, cov = test_artificial_align(sample_=lmd[116611], max_valency=10, k=10, device=device)
+# 4 8 17
+
+prev_output_tokens = torch.load("/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/prev_output.npy")
+tgt_tokens = torch.load("/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/tgt_tokens.npy")
+
+# mask_debug = torch.zeros(tgt_tokens.size(0), dtype=bool)
+# mask_debug[4] = True
+# mask_debug[8] = True
+# mask_debug[17] = True
+mask_debug = torch.tensor([17])
+
+prev_output_tokens = prev_output_tokens[mask_debug]
+tgt_tokens = tgt_tokens[mask_debug]
+
+res_star = pi_star(
+    prev_output_tokens,
+    tgt_tokens,
+    max_valency=10,
+    pad_symbol=1,
+    plh_symbol=3,
+    Kmax=64,
+    device=device,
+)
+print((res_star["y_cmb"] == 0).sum(-1).ne(1).any(-1))
+print(torch.arange(tgt_tokens.size(0), device=prev_output_tokens.device)[(res_star["y_cmb"] == 0).sum(-1).ne(1).any(-1)])
+print("tgt ???", tgt_tokens[(res_star["y_cmb"] == 0).sum(-1).ne(1).any(-1)])
+print("y_del where no bos/eos: ", (prev_output_tokens[(res_star["y_cmb"] == 0).sum(-1).ne(1)]).tolist())
+print("y_plh where no bos/eos: ", (res_star["y_plh"][(res_star["y_cmb"] == 0).sum(-1).ne(1)]).tolist())
+print("y_cmb where no bos/eos: ", (res_star["y_cmb"][(res_star["y_cmb"] == 0).sum(-1).ne(1)]).tolist())
+
 
 # for max_valency in [1, 5, 10, -1]:
 #     for k in [1]:
@@ -449,11 +492,11 @@ lmd = load_lang_multi_dataset(
 # print("(S)  >>>", tgt_dict.string(sample_extreme["source"]))
 # print("(S1) >>>", tgt_dict.string(sample_extreme["multi_source"][0]))
 
-device = "cuda"
-device = "cpu"
-model = load_model()
-model.max_valency = 2
-model = model.to(device)
+# device = "cuda"
+# device = "cpu"
+# model = load_model()
+# model.max_valency = 2
+# model = model.to(device)
 # iterator_3000 = get_batch_iter(lmd)
 # data_iter = iterator_3000.next_epoch_itr(shuffle=False)
 # print(len(data_iter))
@@ -502,46 +545,79 @@ model = model.to(device)
     #     )
     #     # break
 
-model.full_mlevt = True
+# model.full_mlevt = True
 # sample = [lmd[154425], lmd[139552]] #, 154425 139552
-sample = [lmd[154425]]
+# sample = [lmd[154425]]
 # sample = [lmd[139552]]
-print(sample)
-sample = collate(
-    sample,
-    tgt_dict.pad(),
-    tgt_dict.eos(),
-    left_pad_source=True,
-    left_pad_target=False,
-    input_feeding=True,
-    pad_to_length=None,
-    pad_to_multiple=1,
-)
-print(sample.keys())
-src_tokens, src_lengths = (
-    sample["net_input"]["src_tokens"].to(device),
-    sample["net_input"]["src_lengths"].to(device),
-)
-sample["num_iter"] = 2
-tgt_tokens = sample["target"].to(device)
-multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
-# outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, sample["num_iter"], ids=sample["id"])
+# sample = [lmd[0]]
+# print("src: ", src_dict.string(sample[0]["source"], None))
+# for n in range(3):
+#     print("multi_src: ", tgt_dict.string(sample[0]["multi_source"][n], None))
+# print("tgt: ", tgt_dict.string(sample[0]["target"], None))
 
-multi_src_tokens, tgt_tokens = regularize_shapes(
-    multi_src_tokens, tgt_tokens
-)
-res = pi_star(
-    multi_src_tokens,
-    tgt_tokens,
-    pad_symbol=tgt_dict.pad(),
-    plh_symbol=tgt_dict.unk(),
-    Kmax=50,
-    max_valency=10,
-    device=src_tokens.device,
-)
+# sample = collate(
+#     sample,
+#     tgt_dict.pad(),
+#     tgt_dict.eos(),
+#     left_pad_source=True,
+#     left_pad_target=False,
+#     input_feeding=True,
+#     pad_to_length=None,
+#     pad_to_multiple=1,
+# )
+# print(sample.keys())
+# src_tokens, src_lengths = (
+#     sample["net_input"]["src_tokens"].to(device),
+#     sample["net_input"]["src_lengths"].to(device),
+# )
+# sample["num_iter"] = 2
+# tgt_tokens = sample["target"].to(device)
+# multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
+# # with torch.no_grad():
+# #     outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, sample["num_iter"], ids=sample["id"])
 
-print(res)
+# # print(outputs)
 
+
+# # multi_src_tokens, tgt_tokens = regularize_shapes(
+# #     multi_src_tokens, tgt_tokens
+# # )
+# res = pi_star(
+#     multi_src_tokens,
+#     tgt_tokens,
+#     pad_symbol=tgt_dict.pad(),
+#     plh_symbol=tgt_dict.unk(),
+#     Kmax=50,
+#     max_valency=10,
+#     device=src_tokens.device,
+# )
+
+# # print("y_cmb 1: ", res["y_cmb"])
+
+# y_cmb = pi_sel(
+#     res["y_cmb"],
+#     multi_src_tokens,
+#     0.6,
+#     pad_symbol=tgt_dict.pad(),
+#     plh_symbol=tgt_dict.unk(),
+#     bos_symbol=tgt_dict.bos(),
+#     eos_symbol=tgt_dict.eos(),
+#     device=src_tokens.device,
+# )
+# y_cmb[0, :, 1] = tgt_dict.unk()
+# res["cmb_tgt"][0, :, 1] = 0
+# res["y_tok"][0, 1] = tgt_dict.unk()
+# # print("y_cmb 2: ", y_cmb)
+
+# # print("changed: ", y_cmb[res["y_cmb"] == tgt_dict.unk()])
+
+# # print("cmb_tgt 1: ", res["cmb_tgt"])
+# # print("cmb_tgt 2: ", res["cmb_tgt"])
+
+
+# cmb_tgt = handle_all_plh_case(res["cmb_tgt"], res["y_tok"], y_cmb, tgt_dict.unk())
+
+# print("cmb_tgt 3: ", cmb_tgt)
 
 # batch = next(data_iter)
 

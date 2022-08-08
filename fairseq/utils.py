@@ -247,6 +247,81 @@ def post_process_prediction(
     return hypo_tokens, hypo_str, alignment
 
 
+def write_formatted_ops_and_stages(
+    src_str,
+    tgt_src,
+    history_toks,
+    history_ops,
+    filename,
+    tgt_dict,
+):
+    with open(filename, 'a') as f:
+        f.write("<hr>\n")
+        f.write("<hr>\n")
+        f.write("""<p style="line-height:85%"><b>src: </b>""")
+        f.write(src_str)
+        f.write("""</p>\n<p style="line-height:85%"><b>tgt: </b>""")
+        f.write(tgt_src)
+        f.write("</p>\n")
+    for i in range(len(history_toks) - 1):
+        if history_toks[i]["tokens"].dim() > 1:
+            toks_list = [tgt_dict.string(
+                history_toks[i]["tokens"][j], None, extra_symbols_to_ignore=None
+            ).split(" ") for j in range(history_toks[i]["tokens"].size(0))]
+        else:
+            toks_list = [tgt_dict.string(
+                history_toks[i]["tokens"], None, extra_symbols_to_ignore=None
+            ).split(" ")]
+        iii = i - i // 3
+        if i == 0 or (i > 3 and (i % 3 == 1)):
+            # del
+            for c in range(len(toks_list)):
+                for t in range(len(toks_list[c])):
+                    if history_ops[iii]["ops"].dim() == 1:
+                        op = history_ops[iii]["ops"][t + 1]
+                    else:
+                        op = history_ops[iii]["ops"][c][t + 1]
+                    if op.item():
+                        toks_list[c][t] = """<strike><span style="color:#AA0000">""" + toks_list[c][t] + "</strike></span>"            
+        elif i == 1 or (i > 3 and (i % 3 == 2)):
+            # plh
+            for c in range(len(toks_list)):
+                toks_list[c] = [""] + toks_list[c]
+                for t in range(len(toks_list[c])):
+                    if history_ops[iii]["ops"].dim() == 1:
+                        op = history_ops[iii]["ops"][t]
+                    else:
+                        op = history_ops[iii]["ops"][c][t]
+                    if op.item() > 0:
+                        toks_list[c][t] = toks_list[c][t] + """<span style="color:#FF0000">+""" + str(op.item())  + "</span>"
+        elif i == 2:
+            # cmb
+            for c in range(len(toks_list)):
+                for t in range(len(toks_list[c])):
+                    op = history_ops[iii]["ops"][t + 1][c]
+                    if op.item() > 0.5:
+                        toks_list[c][t] = """<span style="color:#000099"><u>""" + toks_list[c][t] + "</u></span>"
+        elif i == 3 or (i > 3 and (i % 3 == 0)):
+            # tok
+            next_toks_list = [tgt_dict.string(
+                history_toks[i + 1]["tokens"], None, extra_symbols_to_ignore=None
+            ).split(" ")]
+            for t in range(len(toks_list[0])):
+                if toks_list[0][t] == "<unk>":
+                    toks_list[0][t] = """<span style="color:#00EE00"><u>""" + next_toks_list[0][t] + "</u></span>"
+        with open(filename, 'a') as f:
+            name = "tok" if i == 3 or (i > 3 and (i % 3 == 0)) else history_ops[iii]['name']
+            f.write("<hr>\n")
+            f.write(f"<p><b>{name}</b></p>")
+            f.write("<table>\n")
+            for c in range(len(toks_list)):
+                f.write("<tr>")
+                for tok in toks_list[c]:
+                    f.write(f"<td>{tok}</td>")
+                f.write("</tr>\n")
+            f.write("</table>\n")
+
+
 def make_positions(tensor, padding_idx: int, onnx_trace: bool = False):
     """Replace non-padding symbols with their position numbers.
 
@@ -778,3 +853,19 @@ def eval_bool(x, default=False):
         return bool(eval(x))
     except TypeError:
         return default
+
+
+class First(object):
+    def __init__(self):
+        super(First, self).__init__()
+        print("first")
+
+class Second(object):
+    def __init__(self):
+        super(Second, self).__init__()
+        print("second")
+
+class Third(First, Second):
+    def __init__(self):
+        super(Third, self).__init__()
+        print("third")

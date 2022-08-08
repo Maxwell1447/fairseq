@@ -12,7 +12,7 @@ from fairseq import utils
 
 DecoderOut = namedtuple(
     "IterativeRefinementDecoderOut",
-    ["output_tokens", "output_scores", "attn", "step", "max_step", "history"],
+    ["output_tokens", "output_scores", "attn", "step", "max_step", "history", "history_ops"],
 )
 
 
@@ -166,10 +166,14 @@ class IterativeRefinementGenerator(object):
 
         if self.retain_history:
             history = prev_decoder_out.history
+            history_ops = prev_decoder_out.history_ops
             if history is None:
                 history = list()
+            if history_ops is None:
+                history_ops = list()
             history.append(prev_output_tokens)
             prev_decoder_out = prev_decoder_out._replace(history=history)
+            prev_decoder_out = prev_decoder_out._replace(history_ops=history_ops)
 
         finalized = [[] for _ in range(bsz)]
 
@@ -185,18 +189,22 @@ class IterativeRefinementGenerator(object):
             return (x == y).all(1), y, s, a
 
         def finalized_hypos(step, prev_out_token, prev_out_score, prev_out_attn):
-            cutoff = prev_out_token.ne(self.pad)
-            tokens = prev_out_token[cutoff]
+            cutoff_mask = prev_out_token.ne(self.pad)
+            cutoff = cutoff_mask.sum(-1).max()
+            if prev_out_token.dim() == 2:
+                tokens = prev_out_token[:, :cutoff]
+            else:
+                tokens = prev_out_token[:cutoff]
             if prev_out_score is None:
                 scores, score = None, None
             else:
-                scores = prev_out_score[cutoff]
+                scores = prev_out_score[cutoff_mask]
                 score = scores.mean()
 
             if prev_out_attn is None:
                 hypo_attn, alignment = None, None
             else:
-                hypo_attn = prev_out_attn[cutoff]
+                hypo_attn = prev_out_attn[cutoff_mask]
                 alignment = hypo_attn.max(dim=1)[1]
             return {
                 "steps": step,
@@ -205,6 +213,15 @@ class IterativeRefinementGenerator(object):
                 "score": score,
                 "hypo_attn": hypo_attn,
                 "alignment": alignment,
+            }
+
+        def finalized_ops(step, prev_out_ops, name):
+            # cutoff = prev_out_token.ne(self.pad)
+            # prev_out_ops = prev_out_ops[cutoff] if prev_out_ops.dim() > 0 else None
+            return {
+                "steps": step,
+                "ops": prev_out_ops,
+                "name": name
             }
 
         for step in range(self.max_iter + 1):
@@ -220,11 +237,11 @@ class IterativeRefinementGenerator(object):
                 max_step=self.max_iter + 1,
             )
 
-            print("prev tokens shapes <<<<", prev_decoder_out.output_tokens.shape)
+            # print("prev tokens shapes <<<<", prev_decoder_out.output_tokens.shape)
             decoder_out = model.forward_decoder(
                 prev_decoder_out, encoder_out, **decoder_options
             )
-            print("decoder out shapes >>>>", decoder_out.output_tokens.shape, decoder_out.output_scores.shape)
+            # print("decoder out shapes >>>>", decoder_out.output_tokens.shape, decoder_out.output_scores.shape)
             assert decoder_out.output_tokens.shape == decoder_out.output_scores.shape
 
             if self.adaptive and prev_output_tokens.dim() == 2:
@@ -260,8 +277,16 @@ class IterativeRefinementGenerator(object):
                 else decoder_out.attn[terminated]
             )
 
+            # print(decoder_out.history)
+            # print(decoder_out.history_ops)
+            # print([h.shape if h is not None else h for h in decoder_out.history])
+            # print([h.shape if h is not None else h for h in decoder_out.history_ops])
+
+            
             if self.retain_history:
-                finalized_history_tokens = [h[terminated] for h in decoder_out.history]
+                finalized_history_tokens = [h[terminated] if h is not None else h for h in decoder_out.history]
+                finalized_history_ops = [(h[0], h[1][terminated]) for h in decoder_out.history_ops]
+                # print("decoder out history tokens :::::: ", finalized_history_tokens)
             
             for i in range(finalized_idxs.size(0)):
                 
@@ -282,6 +307,13 @@ class IterativeRefinementGenerator(object):
                                 step, finalized_history_tokens[j][i], None, None
                             )
                         )
+                    finalized[finalized_idxs[i]][0]["history_ops"] = []
+                    for j in range(len(finalized_history_ops)):
+                        finalized[finalized_idxs[i]][0]["history_ops"].append(
+                            finalized_ops(
+                                step, finalized_history_ops[j][1][i], finalized_history_ops[j][0]
+                            )
+                        )
 
             # check if all terminated
             if terminated.sum() == terminated.size(0):
@@ -289,6 +321,7 @@ class IterativeRefinementGenerator(object):
 
             # for next step
             not_terminated = ~terminated
+            
             prev_decoder_out = decoder_out._replace(
                 output_tokens=decoder_out.output_tokens[not_terminated],
                 output_scores=decoder_out.output_scores[not_terminated],
@@ -297,6 +330,9 @@ class IterativeRefinementGenerator(object):
                 else None,
                 history=[h[not_terminated] for h in decoder_out.history]
                 if decoder_out.history is not None
+                else None,
+                history_ops=[(h[0], h[1][not_terminated]) for h in decoder_out.history_ops]
+                if decoder_out.history_ops is not None
                 else None,
             )
             encoder_out = model.encoder.reorder_encoder_out(

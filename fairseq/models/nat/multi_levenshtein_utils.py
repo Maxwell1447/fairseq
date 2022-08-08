@@ -141,12 +141,9 @@ def pi_sel(
 
     idxs = torch.remainder(idxs, dividend[mask_void]) + 1
     idxs = idxs[:, :, torch.randperm(idxs.size(-1))]
+    mask[~mask_void] = False
 
-    y_cmb[mask_void][mask[mask_void]] = torch.gather(y_refs[mask_void], 2, idxs)[mask[mask_void]]
-    # idxs.cpu()
-    # idxs.max()
-    # idxs.cpu().max()
-    # ddd = idxs.cpu().max().item()
+    y_cmb[mask] = torch.gather(y_refs[mask_void], 2, idxs)[mask[mask_void]]
 
     return y_cmb
 
@@ -206,9 +203,7 @@ def pi_star(
 
 
 def handle_all_plh_case(cmb_tgt, y_tok, y_cmb, plh_symbol):
-    msk_cmb_sel = ((y_tok == plh_symbol) & (~(y_cmb == plh_symbol).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == plh_symbol)
-    # cmb_tgt[msk_cmb_sel] = 7
-    # mask_all_plh = (y_tok == plh_symbol).unsqueeze(1).expand_as(cmb_tgt)
+    msk_cmb_sel = ((y_tok == plh_symbol) & ((y_cmb == plh_symbol).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == plh_symbol)
     cmb_tgt[msk_cmb_sel] = 1
     return cmb_tgt
 

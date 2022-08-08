@@ -346,7 +346,7 @@ def filter_multi_source_dataset_indices_by_size(
     max_multi_src_size = None
     min_size = 0
     if max_sizes is None:
-        max_sizes = 256
+        max_sizes = 512
         return indices, []
     if type(max_sizes) in (int, float):
         max_src_size, max_tgt_size = max_sizes, max_sizes
@@ -357,17 +357,17 @@ def filter_multi_source_dataset_indices_by_size(
     else:
         max_src_size, max_multi_src_size, max_tgt_size = max_sizes
     mask = (src_sizes[indices] > max_src_size) | (src_sizes[indices] < min_size)
-    # print("src acc", mask.sum())
+    print("src acc", mask.sum())
     if tgt_sizes is not None:
         ignored = indices[src_sizes[indices] > max_src_size]
-        # print("mask cpt 1", mask)
+        print("mask cpt 1", mask.sum())
         mask = mask | (tgt_sizes[indices] > max_tgt_size) | (tgt_sizes[indices] < min_size)
-    # print("tgt acc", mask.sum())
+    print("tgt acc", mask.sum())
     if max_multi_src_size is not None:
         for single_src_size in multi_src_sizes:
             mask = mask | (single_src_size[indices] > max_multi_src_size) | (single_src_size[indices] < min_size)
 
-    # print("multi acc", mask.sum())
+    print("multi acc", mask.sum())
     for single_src_size in multi_src_sizes:
         mask = mask | (
             single_src_size[indices]
@@ -375,7 +375,7 @@ def filter_multi_source_dataset_indices_by_size(
         )
 
     ignored = indices[mask]
-    # print("ignore", len(ignored))
+    print("ignore", len(ignored))
 
     if len(ignored) > 0:
         if tgt_sizes is None:
