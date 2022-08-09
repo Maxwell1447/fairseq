@@ -180,7 +180,7 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
   }
 
   // initialize with source
-  for (long i = 0; (i < (long)graph.size()) && (i < max_valency); ++i)
+  for (long i = 0; (i == 0) && (i < (long)graph.size()) && (i < max_valency); ++i)
   {
     dag.at(0).addNext(&dag.at(i + 1));
     dag.at(i + 1).addPrec(&dag.at(0));
@@ -209,13 +209,15 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
   }
 
   // finalize with target
-  for (long i = 0; i < (long)graph.size(); ++i)
+  // for (long i = 0; i < (long)graph.size(); ++i)
+  for (long i = (long)graph.size() - 1; i >= 0; --i)
   {
     if (!dag.at(i + 1).hasNext() && dag.at(i + 1).hasPrec())
     {
       dag.at(i + 1).addNext(&dag.at(graph.size() + 1));
       dag.at(graph.size() + 1).addPrec(&dag.at(i + 1));
       cout << i << "->" << "t" << endl;
+      break;
     }
   }
 
@@ -625,9 +627,29 @@ void getOpsFromSingle(
 
 int main() {
 
-  cout << "Hello World!";
+  const long s_i_len = 25;
+  const long s_ref_len = 25;
+  const long n = 2;
+  const long *s_i = new long[25 * n]{
+    // 0, 981, 6739, 18, 25844, 12231, 276, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 3, 3, 3, 3, 3, 3, 8, 807, 3, 7, 11456, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 77, 5, 2,
+    0, 46, 7, 276, 21814, 8, 7, 807, 17853, 5, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+  };
+  const long *s_ref = new long[25]{
+    0, 276, 5, 4375, 11456, 26, 7, 273, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+  };
 
-  return 0;
+  long *s_del = new long[25 * n];
+  long *s_plh = new long[25 * n];
+  long *s_cmb = new long[25 * n];
+  long *del = new long[25 * n];
+  long *ins = new long[25 * n];
+  long *cmb = new long[25 * n];
+
+
+  getOpsFromSingle(s_i, s_ref, s_i_len, s_ref_len, n, 10, 10, del, ins, cmb, s_del, s_plh, s_cmb, 1, 3);
+
+  cout << "Hello World!";
 }
 
 // void getOpsFromBatch(
