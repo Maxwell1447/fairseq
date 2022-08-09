@@ -1,4 +1,4 @@
-#include <torch/torch.h> // @manual=//caffe2:torch_extension
+// #include <torch/torch.h> // @manual=//caffe2:torch_extension
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
@@ -14,7 +14,7 @@
 #include "edit_dist.h"
 
 using namespace std;
-namespace py = pybind11;
+// namespace py = pybind11;
 
 Edge::Edge(long x, long y) : x(x), y(y)
 {
@@ -184,7 +184,7 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
   {
     dag.at(0).addNext(&dag.at(i + 1));
     dag.at(i + 1).addPrec(&dag.at(0));
-    // cout << "s" << "->" << i << endl;
+    cout << "s" << "->" << i << endl;
   }
 
   // build DAG core
@@ -203,7 +203,7 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
         current_valency++;
         dag.at(i + 1).addNext(&dag.at(j + 1));
         dag.at(j + 1).addPrec(&dag.at(i + 1));
-        // cout << i << "->" << j << endl;
+        cout << i << "->" << j << endl;
       }
     }
   }
@@ -215,7 +215,7 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
     {
       dag.at(i + 1).addNext(&dag.at(graph.size() + 1));
       dag.at(graph.size() + 1).addPrec(&dag.at(i + 1));
-      // cout << i << "->" << "t" << endl;
+      cout << i << "->" << "t" << endl;
     }
   }
 
@@ -422,7 +422,7 @@ vector<list<vector<long>>> kBestGraphs(list<Edge> graph, const long &k, const lo
   vector<Node> dag = buildDAGFromGraph(graph_vec, max_valency);
   // long table[dag.size() * k * 2] = {0};
   long *table = new long[(long)dag.size() * k * 2];
-  for (long i = 0; i < (long)dag.size() * k * 2; i++) table[i] = 0;
+  // for (long i = 0; i < (long)dag.size() * k * 2; i++) table[i] = 0;
   forwardKBest(dag, k, table);
   vector<list<long>> paths = backwardKBest(table, k, dag.size());
   k_best = graphToIndexation(paths, graph_vec);
@@ -433,12 +433,13 @@ vector<list<vector<long>>> kBestGraphs(list<Edge> graph, const long &k, const lo
 
 void indexationMask(vector<list<vector<long>>> indexation, long seq_len, bool *out)
 {
+  // indexation: k x num_edge x 2
   for (long j = 0; j < (long)indexation.size(); ++j)
   {
     for (vector<long> const &pair : indexation.at(j))
     {
-      out[j * 2 * seq_len + pair.at(0)] = true;
-      out[j * 2 * seq_len + seq_len + pair.at(1)] = true;
+      out[j * 2 * seq_len + pair.at(0)] = 1;
+      out[j * 2 * seq_len + seq_len + pair.at(1)] = 1;
     }
   }
 };
@@ -535,7 +536,7 @@ void getOpsFromSingle(
 
     all_indexations.at(i) = kBestGraphs(graph, k, max_valency);
 
-    bool *out = new bool[(long)all_indexations.at(i).size() * 2 * seq_len];
+    bool *out = new bool[k * 2 * seq_len];
     indexationMask(all_indexations.at(i), seq_len, out);
 
     for (long m = 0; m < (k * 2 * seq_len); ++m)
@@ -543,6 +544,20 @@ void getOpsFromSingle(
       all_masked[i * k * 2 * seq_len + m] = out[m];
       // cout << " " << out[m];
     }
+    // for (long kk = 0; kk < k; kk++) {
+    //   cout << kk << "\t";
+    //   for (long ll = 0; ll < seq_len; ll++) {
+    //     // if (out[kk * 2 * seq_len + 1 * seq_len + ll]) {
+    //     //   cout << "1";
+    //     // }
+    //     // else {
+    //     //   cout << "0";
+    //     // }
+    //     cout << out[kk * 2 * seq_len + 1 * seq_len + ll];
+    //     cout << "";
+    //   }
+    //   cout << endl;
+    // }
     // cout << endl;
 
     filters.at(i) = filterRedundancy(&all_masked[i * k * 2 * seq_len], k, seq_len);
@@ -607,130 +622,138 @@ void getOpsFromSingle(
   delete [] current_cover;
 }
 
-void getOpsFromBatch(
-    const long *s_i,
-    const long *s_ref,
-    const long &s_i_len,
-    const long &s_ref_len,
-    const long &bsz,
-    const long &n,
-    const long &k,
-    const long &max_valency,
-    long *del,
-    long *ins,
-    long *cmb,
-    long *s_del,
-    long *s_plh,
-    long *s_cmb,
-    const long &pad,
-    const long &unk)
-{
-  long seq_len = max(s_i_len, s_ref_len);
-  vector<thread> threads = vector<thread>();
-  thread t;
-  for (long b = 0; b < bsz; ++b)
-  {
-    t = thread(
-        getOpsFromSingle,
-        &s_i[b * n * s_i_len],
-        &s_ref[b * s_ref_len],
-        s_i_len,
-        s_ref_len,
-        n,
-        k,
-        max_valency,
-        &del[b * n * seq_len],
-        &ins[b * n * (seq_len - 1)],
-        &cmb[b * n * seq_len],
-        &s_del[b * n * seq_len],
-        &s_plh[b * n * seq_len],
-        &s_cmb[b * seq_len],
-        pad,
-        unk);
-    threads.push_back(move(t));
-  }
-  for (thread &t : threads)
-  {
-    t.join();
-  }
+
+int main() {
+
+  cout << "Hello World!";
+
+  return 0;
 }
 
-class EditOpsBatch
-{
-public:
-  long bsz;
-  long n;
-  long s_i_len;
-  long s_ref_len;
-  long k;
+// void getOpsFromBatch(
+//     const long *s_i,
+//     const long *s_ref,
+//     const long &s_i_len,
+//     const long &s_ref_len,
+//     const long &bsz,
+//     const long &n,
+//     const long &k,
+//     const long &max_valency,
+//     long *del,
+//     long *ins,
+//     long *cmb,
+//     long *s_del,
+//     long *s_plh,
+//     long *s_cmb,
+//     const long &pad,
+//     const long &unk)
+// {
+//   long seq_len = max(s_i_len, s_ref_len);
+//   vector<thread> threads = vector<thread>();
+//   thread t;
+//   for (long b = 0; b < bsz; ++b)
+//   {
+//     t = thread(
+//         getOpsFromSingle,
+//         &s_i[b * n * s_i_len],
+//         &s_ref[b * s_ref_len],
+//         s_i_len,
+//         s_ref_len,
+//         n,
+//         k,
+//         max_valency,
+//         &del[b * n * seq_len],
+//         &ins[b * n * (seq_len - 1)],
+//         &cmb[b * n * seq_len],
+//         &s_del[b * n * seq_len],
+//         &s_plh[b * n * seq_len],
+//         &s_cmb[b * seq_len],
+//         pad,
+//         unk);
+//     threads.push_back(move(t));
+//   }
+//   for (thread &t : threads)
+//   {
+//     t.join();
+//   }
+// }
 
-  torch::Tensor del;
-  torch::Tensor ins;
-  torch::Tensor cmb;
+// class EditOpsBatch
+// {
+// public:
+//   long bsz;
+//   long n;
+//   long s_i_len;
+//   long s_ref_len;
+//   long k;
 
-  torch::Tensor s_del;
-  torch::Tensor s_ins;
-  torch::Tensor s_cmb;
+//   torch::Tensor del;
+//   torch::Tensor ins;
+//   torch::Tensor cmb;
 
-  EditOpsBatch(){};
-  EditOpsBatch(
-      torch::Tensor s_i, torch::Tensor s_ref,
-      long k_, long max_valency, long pad, long unk)
-  {
-    bsz = s_i.size(0);
-    n = s_i.size(1);
-    k = k_;
-    if (max_valency <= 0) {
-      max_valency = LONG_MAX;
-    }
-    s_i_len = s_i.size(2);
-    s_ref_len = s_ref.size(1);
-    long seq_len = max(s_i_len, s_ref_len);
+//   torch::Tensor s_del;
+//   torch::Tensor s_ins;
+//   torch::Tensor s_cmb;
 
-    auto options = torch::TensorOptions()
-                       .dtype(torch::kI64);
+//   EditOpsBatch(){};
+//   EditOpsBatch(
+//       torch::Tensor s_i, torch::Tensor s_ref,
+//       long k_, long max_valency, long pad, long unk)
+//   {
+//     bsz = s_i.size(0);
+//     n = s_i.size(1);
+//     k = k_;
+//     if (max_valency <= 0) {
+//       max_valency = LONG_MAX;
+//     }
+//     s_i_len = s_i.size(2);
+//     s_ref_len = s_ref.size(1);
+//     long seq_len = max(s_i_len, s_ref_len);
 
-    // initialize ops
-    del = torch::zeros({bsz, n, seq_len}, options);
-    ins = torch::zeros({bsz, n, seq_len - 1}, options);
-    cmb = torch::zeros({bsz, n, seq_len}, options);
+//     auto options = torch::TensorOptions()
+//                        .dtype(torch::kI64);
 
-    s_del = torch::full({bsz, n, seq_len}, pad, options);
-    s_ins = torch::full({bsz, n, seq_len}, pad, options);
-    s_cmb = torch::full({bsz, seq_len}, pad, options);
+//     // initialize ops
+//     del = torch::zeros({bsz, n, seq_len}, options);
+//     ins = torch::zeros({bsz, n, seq_len - 1}, options);
+//     cmb = torch::zeros({bsz, n, seq_len}, options);
 
-    getOpsFromBatch(
-        s_i.data_ptr<long>(), s_ref.data_ptr<long>(),
-        s_i_len, s_ref_len,
-        bsz,
-        n,
-        k,
-        max_valency,
-        del.data_ptr<long>(),
-        ins.data_ptr<long>(),
-        cmb.data_ptr<long>(),
-        s_del.data_ptr<long>(),
-        s_ins.data_ptr<long>(),
-        s_cmb.data_ptr<long>(),
-        pad, unk);
-  };
-  torch::Tensor getDel() { return del; };
-  torch::Tensor getIns() { return ins; };
-  torch::Tensor getCmb() { return cmb; };
-  torch::Tensor getSDel() { return s_del; };
-  torch::Tensor getSIns() { return s_ins; };
-  torch::Tensor getSCmb() { return s_cmb; };
-};
+//     s_del = torch::full({bsz, n, seq_len}, pad, options);
+//     s_ins = torch::full({bsz, n, seq_len}, pad, options);
+//     s_cmb = torch::full({bsz, seq_len}, pad, options);
 
-PYBIND11_MODULE(libnat2, m)
-{
-  py::class_<EditOpsBatch>(m, "MultiLevEditOps")
-      .def(py::init<torch::Tensor, torch::Tensor, long, long, long, long>())
-      .def(py::init<>())
-      .def("get_del", &EditOpsBatch::getDel)
-      .def("get_ins", &EditOpsBatch::getIns)
-      .def("get_cmb", &EditOpsBatch::getCmb)
-      .def("get_s_del", &EditOpsBatch::getSDel)
-      .def("get_s_ins", &EditOpsBatch::getSIns)
-      .def("get_s_cmb", &EditOpsBatch::getSCmb);
-}
+//     getOpsFromBatch(
+//         s_i.data_ptr<long>(), s_ref.data_ptr<long>(),
+//         s_i_len, s_ref_len,
+//         bsz,
+//         n,
+//         k,
+//         max_valency,
+//         del.data_ptr<long>(),
+//         ins.data_ptr<long>(),
+//         cmb.data_ptr<long>(),
+//         s_del.data_ptr<long>(),
+//         s_ins.data_ptr<long>(),
+//         s_cmb.data_ptr<long>(),
+//         pad, unk);
+//   };
+//   torch::Tensor getDel() { return del; };
+//   torch::Tensor getIns() { return ins; };
+//   torch::Tensor getCmb() { return cmb; };
+//   torch::Tensor getSDel() { return s_del; };
+//   torch::Tensor getSIns() { return s_ins; };
+//   torch::Tensor getSCmb() { return s_cmb; };
+// };
+
+// PYBIND11_MODULE(libnat2, m)
+// {
+//   py::class_<EditOpsBatch>(m, "MultiLevEditOps")
+//       .def(py::init<torch::Tensor, torch::Tensor, long, long, long, long>())
+//       .def(py::init<>())
+//       .def("get_del", &EditOpsBatch::getDel)
+//       .def("get_ins", &EditOpsBatch::getIns)
+//       .def("get_cmb", &EditOpsBatch::getCmb)
+//       .def("get_s_del", &EditOpsBatch::getSDel)
+//       .def("get_s_ins", &EditOpsBatch::getSIns)
+//       .def("get_s_cmb", &EditOpsBatch::getSCmb);
+// }
