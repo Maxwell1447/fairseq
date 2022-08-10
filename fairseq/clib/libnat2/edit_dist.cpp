@@ -119,6 +119,24 @@ void Path::printPath() const
   cout << "\n";
 }
 
+template <typename T>
+struct type_pair {
+  public:
+    type_pair(T xx, T yy) {
+      x = xx;
+      y = yy;
+    }
+    T& operator[](unsigned idx) {
+      if (idx <= 0) {
+        return x;
+      }
+      return y;
+    }
+  private:
+    T x;
+    T y;
+};
+
 list<Edge> buildGraph(
     const long *left, const long *right,
     const long &size_left, const long &size_right, const long &pad)
@@ -224,50 +242,63 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
   return dag;
 };
 
-void insertPair(long *best_scores, long *element, const long &k)
+void insertPair(vector<type_pair<long>> &best_scores, type_pair<long> &pair, const long &k)
 {
   long index = 1;
-  long temp[2];
+  long temp1, temp2;
 
-  if (best_scores[1] < element[1])
+  // if (best_scores[1] < element[1])
+  if (best_scores[0][1] < pair[1])
   {
-    best_scores[0] = element[0];
-    best_scores[1] = element[1];
+    // best_scores[0] = element[0];
+    // best_scores[1] = element[1];
+    best_scores[0][0] = pair[0];
+    best_scores[0][1] = pair[1];
   }
   else
   {
     return;
   }
-  while ((index < k) && (element[1] > best_scores[index * 2 + 1]))
+  // while ((index < k) && (element[1] > best_scores[index * 2 + 1]))
+  while ((index < k) && (pair[1] > best_scores[index][1]))
   {
-    temp[0] = best_scores[index * 2];
-    temp[1] = best_scores[index * 2 + 1];
-    best_scores[index * 2] = best_scores[(index - 1) * 2];
-    best_scores[index * 2 + 1] = best_scores[(index - 1) * 2 + 1];
-    best_scores[(index - 1) * 2] = temp[0];
-    best_scores[(index - 1) * 2 + 1] = temp[1];
+    // temp[0] = best_scores[index * 2];
+    // temp[1] = best_scores[index * 2 + 1];
+    temp1 = best_scores[index][0];
+    temp2 = best_scores[index][1];
+    // best_scores[index * 2] = best_scores[(index - 1) * 2];
+    // best_scores[index * 2 + 1] = best_scores[(index - 1) * 2 + 1];
+    best_scores[index][0] = best_scores[index - 1][0];
+    best_scores[index][1] = best_scores[index - 1][1];
+    // best_scores[(index - 1) * 2] = temp[0];
+    // best_scores[(index - 1) * 2 + 1] = temp[1];
+    best_scores[index - 1][0] = temp1;
+    best_scores[index - 1][1] = temp2;
     index++;
   }
 }
 
-void forwardKBest(vector<Node> &dag, const long &k, long *tableOfDist)
+void forwardKBest(vector<Node> &dag, const long &k, vector<vector<type_pair<long>>> &tableOfDist)
 {
   for (long i = 1; i < (long)dag.size(); ++i)
   {
     for (list<Node *>::reverse_iterator it = dag.at(i).prec.rbegin(); it != dag.at(i).prec.rend(); ++it)
     {
-      if (tableOfDist[i * k * 2 + 0 * 2 + 1] < (**it).index + 1)
+      // if (tableOfDist[i * k * 2 + 0 * 2 + 1] < (**it).index + 1)
+      if (tableOfDist[i][0][1] < (**it).index + 1)
       {
-        long pair[2] = {
+        type_pair<long> pair{
             (**it).index,
-            tableOfDist[(**it).index * k * 2 + (k - 1) * 2 + 1] + 1};
-        insertPair(&tableOfDist[i * k * 2], pair, k);
+            // tableOfDist[(**it).index * k * 2 + (k - 1) * 2 + 1] + 1};
+            tableOfDist[(**it).index][k - 1][1] + 1};
+        // insertPair(&tableOfDist[i * k * 2], pair, k);
+        insertPair(tableOfDist[i], pair, k);
       }
     }
   }
 }
 
-vector<list<long>> backwardKBest(long *table, const long &k, const long &dag_size)
+vector<list<long>> backwardKBest(vector<vector<type_pair<long>>> &table, const long &k, const long &dag_size)
 {
   vector<list<long>> paths(k, list<long>());
   list<Path> candidates = {Path()};
@@ -279,7 +310,8 @@ vector<list<long>> backwardKBest(long *table, const long &k, const long &dag_siz
     current.at(j).score = 0;
   }
   current.at(k - 1).path.push_back(dag_size - 1);
-  current.at(k - 1).score = table[(dag_size - 1) * k * 2 + (k - 1) * 2 + 1];
+  // current.at(k - 1).score = table[(dag_size - 1) * k * 2 + (k - 1) * 2 + 1];
+  current.at(k - 1).score = table[dag_size - 1][k - 1][1];
 
   bool candidatesRemaining = true;
 
@@ -294,13 +326,18 @@ vector<list<long>> backwardKBest(long *table, const long &k, const long &dag_siz
       {
         for (long m = 0; m < k; ++m)
         {
-          if ((table[i * k * 2 + m * 2 + 0] + table[i * k * 2 + m * 2 + 1]) > 0)
+          // if ((table[i * k * 2 + m * 2 + 0] + table[i * k * 2 + m * 2 + 1]) > 0)
+          if ((table[i][m][0] + table[i][m][1]) > 0)
           {
+            // candidates.push_back(Path(
+            //     current.at(j),
+            //     table[i * k * 2 + m * 2 + 0],
+            //     table[i * k * 2 + m * 2 + 1] + num_iter));
             candidates.push_back(Path(
                 current.at(j),
-                table[i * k * 2 + m * 2 + 0],
-                table[i * k * 2 + m * 2 + 1] + num_iter));
-            if (table[i * k * 2 + m * 2 + 0] == 0)
+                table[i][m][0],
+                table[i][m][1] + num_iter));
+            if (table[i][m][0] == 0)
             {
               candidates.back().completed = true;
             }
@@ -332,6 +369,7 @@ vector<list<long>> backwardKBest(long *table, const long &k, const long &dag_siz
         p.score = 0;
         p.path = {0};
         current.at(m) = p;
+
       }
     }
     // insert candidates when they surpass current paths
@@ -346,6 +384,7 @@ vector<list<long>> backwardKBest(long *table, const long &k, const long &dag_siz
           for (long m = 1; (m < k) && (current.at(m - 1) >= current.at(m)); ++m)
           {
             swap(current.at(m - 1), current.at(m));
+
           }
         }
       }
@@ -393,11 +432,11 @@ vector<list<long>> backwardKBest(long *table, const long &k, const long &dag_siz
   return paths;
 }
 
-vector<list<vector<long>>> graphToIndexation(vector<list<long>> &paths, vector<Edge> &graph)
+vector<list<type_pair<long>>> graphToIndexation(vector<list<long>> &paths, vector<Edge> &graph)
 {
-  vector<list<vector<long>>> out = vector<list<vector<long>>>(
+  vector<list<type_pair<long>>> out = vector<list<type_pair<long>>>(
     paths.size(),
-    list<vector<long>>()
+    list<type_pair<long>>()
   );
   // paths k x ?
   for (long j = 0; j < (long)paths.size(); ++j)
@@ -411,9 +450,9 @@ vector<list<vector<long>>> graphToIndexation(vector<list<long>> &paths, vector<E
   return out;
 };
 
-vector<list<vector<long>>> kBestGraphs(list<Edge> graph, const long &k, const long &max_valency)
+vector<list<type_pair<long>>> kBestGraphs(list<Edge> graph, const long &k, const long &max_valency)
 {
-  vector<list<vector<long>>> k_best;
+  vector<list<type_pair<long>>> k_best;
 
   vector<Edge> graph_vec;
   for (Edge &e : graph)
@@ -423,30 +462,52 @@ vector<list<vector<long>>> kBestGraphs(list<Edge> graph, const long &k, const lo
 
   vector<Node> dag = buildDAGFromGraph(graph_vec, max_valency);
   // long table[dag.size() * k * 2] = {0};
-  long *table = new long[(long)dag.size() * k * 2];
+  // long *table = new long[(long)dag.size() * k * 2];
+  vector<vector<type_pair<long>>> table = vector<vector<type_pair<long>>>(
+    (long)dag.size(),
+    vector<type_pair<long>>(
+      k,
+      type_pair<long>{0, 0}
+    )
+  );
+  
+  // long table_size = (long)dag.size() * k * 2;
+  // for (long iii = 0; iii < table_size; iii++) {
+  //   // cout << table[iii] << " ";
+  //   table[iii] = 0;
+  // }
+  // cout << endl;
   // for (long i = 0; i < (long)dag.size() * k * 2; i++) table[i] = 0;
   forwardKBest(dag, k, table);
   vector<list<long>> paths = backwardKBest(table, k, dag.size());
   k_best = graphToIndexation(paths, graph_vec);
 
-  delete [] table;
+  // delete [] table;
   return k_best;
 };
 
-void indexationMask(vector<list<vector<long>>> indexation, long seq_len, bool *out)
+void indexationMask(vector<list<type_pair<long>>> indexation, long seq_len, 
+  // bool *out
+  vector<vector<type_pair<bool>>> &out
+  )
 {
   // indexation: k x num_edge x 2
   for (long j = 0; j < (long)indexation.size(); ++j)
   {
-    for (vector<long> const &pair : indexation.at(j))
+    for (type_pair<long> &pair : indexation.at(j))
     {
-      out[j * 2 * seq_len + pair.at(0)] = 1;
-      out[j * 2 * seq_len + seq_len + pair.at(1)] = 1;
+      // out[j * 2 * seq_len + pair.at(0)] = 1;
+      // out[j * 2 * seq_len + seq_len + pair.at(1)] = 1;
+      out[j][pair[0]][0] = 1;
+      out[j][pair[1]][1] = 1;
     }
   }
 };
 
-list<long> filterRedundancy(bool *masked_k_best, const long &k, const long &seq_len)
+list<long> filterRedundancy(
+  // bool *masked_k_best,
+  vector<vector<type_pair<bool>>> masked_k_best,
+  const long &k, const long &seq_len)
 {
   list<long> filter = list<long>();
   // masked_k_best k x 2 x L
@@ -459,7 +520,8 @@ list<long> filterRedundancy(bool *masked_k_best, const long &k, const long &seq_
       bool match = true;
       for (long i = 0; (i < seq_len) && (match); ++i)
       {
-        match = (masked_k_best[j * 2 * seq_len + seq_len + i] || masked_k_best[m * 2 * seq_len + seq_len + i]) == masked_k_best[m * 2 * seq_len + seq_len + i];
+        // match = (masked_k_best[j * 2 * seq_len + seq_len + i] || masked_k_best[m * 2 * seq_len + seq_len + i]) == masked_k_best[m * 2 * seq_len + seq_len + i];
+        match = (masked_k_best[j][i][1] || masked_k_best[m][i][1]) == masked_k_best[m][i][1];
       }
       found_no_match = !match;
     }
@@ -474,12 +536,16 @@ list<long> filterRedundancy(bool *masked_k_best, const long &k, const long &seq_
 
 void recursiveCoverSearch(
     const long &dim, long &max_score,
-    bool *max_cover, vector<long> &choices,
+    // bool *max_cover, 
+    vector<bool> &max_cover, 
+    vector<long> &choices,
     const vector<list<long>> &filters,
-    const bool *all_masks,
+    // const bool *all_masks,
+    vector<vector<vector<type_pair<bool>>>> &all_masks,
     long current_dim,
     list<long> current_choice,
-    bool *current_cover,
+    // bool *current_cover,
+    vector<bool> &current_cover,
     const long &k, const long &seq_len)
 {
   if (current_dim == dim)
@@ -502,8 +568,10 @@ void recursiveCoverSearch(
       new_choice.push_back(m);
       for (long i = 0; i < seq_len; ++i)
       {
+        // current_cover[i] = (current_cover[i] ||
+        //                     all_masks[current_dim * k * 2 * seq_len + m * 2 * seq_len + 1 * seq_len + i]);
         current_cover[i] = (current_cover[i] ||
-                            all_masks[current_dim * k * 2 * seq_len + m * 2 * seq_len + 1 * seq_len + i]);
+                            all_masks[current_dim][m][i][1]);
       }
       recursiveCoverSearch(
         dim, max_score,
@@ -527,8 +595,19 @@ void getOpsFromSingle(
     const long &pad, const long &unk)
 {
   const long seq_len = max(s_i_len, s_ref_len);
-  bool *all_masked = new bool[n * k * 2 * seq_len];
-  vector<vector<list<vector<long>>>> all_indexations = vector<vector<list<vector<long>>>>(n);
+  // bool *all_masked = new bool[n * k * 2 * seq_len];
+  vector<vector<vector<type_pair<bool>>>> all_masked = vector<vector<vector<type_pair<bool>>>>(
+    n,
+    vector<vector<type_pair<bool>>>(
+      k,
+      vector<type_pair<bool>>(
+        seq_len,
+        type_pair<bool>{0, 0}
+      )
+    )
+  );
+
+  vector<vector<list<type_pair<long>>>> all_indexations = vector<vector<list<type_pair<long>>>>(n);
   vector<list<long>> filters = vector<list<long>>(n);
   for (long i = 0; i < n; ++i)
   {
@@ -538,14 +617,30 @@ void getOpsFromSingle(
 
     all_indexations.at(i) = kBestGraphs(graph, k, max_valency);
 
-    bool *out = new bool[k * 2 * seq_len];
+    // bool *out = new bool[k * 2 * seq_len];
+    vector<vector<type_pair<bool>>> out = vector<vector<type_pair<bool>>>(
+      k,
+      vector<type_pair<bool>>(
+        seq_len,
+        type_pair<bool>{0, 0}
+      )
+    );
     indexationMask(all_indexations.at(i), seq_len, out);
 
-    for (long m = 0; m < (k * 2 * seq_len); ++m)
+    // for (long m = 0; m < (k * 2 * seq_len); ++m)
+    // {
+    //   all_masked[i * k * 2 * seq_len + m] = out[m];
+    //   // cout << " " << out[m];
+    // }
+    for (long kk = 0; kk < k; kk++)
     {
-      all_masked[i * k * 2 * seq_len + m] = out[m];
-      // cout << " " << out[m];
+      for (long ll = 0; ll < seq_len; ll++)
+      {
+        all_masked[i][kk][ll][0] = out[kk][ll][0];
+        all_masked[i][kk][ll][1] = out[kk][ll][1];
+      }
     }
+
     // for (long kk = 0; kk < k; kk++) {
     //   cout << kk << "\t";
     //   for (long ll = 0; ll < seq_len; ll++) {
@@ -562,7 +657,8 @@ void getOpsFromSingle(
     // }
     // cout << endl;
 
-    filters.at(i) = filterRedundancy(&all_masked[i * k * 2 * seq_len], k, seq_len);
+    // filters.at(i) = filterRedundancy(&all_masked[i * k * 2 * seq_len], k, seq_len);
+    filters.at(i) = filterRedundancy(all_masked[i], k, seq_len);
 
     cout << "filtered : ";
     for (auto const &m : filters.at(i)) {
@@ -570,12 +666,14 @@ void getOpsFromSingle(
     }
     cout << endl;
 
-    delete [] out;
+    // delete [] out;
   }
 
   long max_score = 0;
-  bool *max_cover = new bool[seq_len];
-  bool *current_cover = new bool[seq_len];
+  // bool *max_cover = new bool[seq_len];
+  // bool *current_cover = new bool[seq_len];
+  vector<bool> max_cover = vector<bool>(seq_len);
+  vector<bool> current_cover = vector<bool>(seq_len);
   vector<long> choices = vector<long>(n);
   recursiveCoverSearch(
     n, max_score, max_cover,
@@ -595,61 +693,95 @@ void getOpsFromSingle(
   for (long i = 0; i < n; ++i)
   {
     j = choices.at(i);
-    cout << "choice " << i << " = " << j << endl;
     long cpt_index = 0;
     long cpt_ins = -1;
     for (long l = 0; (l < s_ref_len) && (s_ref[l] != pad); ++l)
     {
       s_plh[i * seq_len + l] = unk;
     }
-    for (vector<long> const &idx : all_indexations.at(i).at(j))
+    list<type_pair<long>> ttt =  all_indexations.at(i).at(j);
+    for (type_pair<long> &idx : all_indexations.at(i).at(j))
     {
-      del[i * seq_len + idx.at(0)] = 1;
+      del[i * seq_len + idx[0]] = 1;
       if (cpt_index > 0)
       {
-        ins[i * (seq_len - 1) + cpt_index - 1] = idx.at(1) - cpt_ins - 1;
+        ins[i * (seq_len - 1) + cpt_index - 1] = idx[1] - cpt_ins - 1;
       }
-      cmb[i * seq_len + idx.at(1)] = 1;
+      cmb[i * seq_len + idx[1]] = 1;
 
-      s_del[i * seq_len + cpt_index] = s_i[i * seq_len + idx.at(0)];
-      s_plh[i * seq_len + idx.at(1)] = s_ref[idx.at(1)];
-      s_cmb[idx.at(1)] = s_ref[idx.at(1)];
+      s_del[i * seq_len + cpt_index] = s_i[i * seq_len + idx[0]];
+      s_plh[i * seq_len + idx[1]] = s_ref[idx[1]];
+      s_cmb[idx[1]] = s_ref[idx[1]];
 
-      cpt_ins = idx.at(1);
+      cpt_ins = idx[1];
       cpt_index++;
     }
   }
-  delete [] all_masked;
-  delete [] max_cover;
-  delete [] current_cover;
+  // delete [] all_masked;
+  // delete [] max_cover;
+  // delete [] current_cover;
 }
 
 
 int main() {
 
-  const long s_i_len = 25;
-  const long s_ref_len = 25;
-  const long n = 2;
-  const long *s_i = new long[25 * n]{
-    // 0, 981, 6739, 18, 25844, 12231, 276, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    0, 3, 3, 3, 3, 3, 3, 8, 807, 3, 7, 11456, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 77, 5, 2,
-    0, 46, 7, 276, 21814, 8, 7, 807, 17853, 5, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
-  };
-  const long *s_ref = new long[25]{
-    0, 276, 5, 4375, 11456, 26, 7, 273, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
-  };
+  // type_pair<long> p{13, 19};
 
-  long *s_del = new long[25 * n];
-  long *s_plh = new long[25 * n];
-  long *s_cmb = new long[25 * n];
-  long *del = new long[25 * n];
-  long *ins = new long[25 * n];
-  long *cmb = new long[25 * n];
+  // vector<type_pair<long>> v = vector<type_pair<long>>(
+  //   4,
+  //   type_pair<long>{1, 2}
+  // );
+
+  // vector<type_pair<long *>> v_p = vector<type_pair<long *>>(
+  //   4,
+  //   type_pair<long *>{0, 0}
+  // );
+  // vector<type_pair<long> *> v_pair_p = vector<type_pair<long> *>(
+  //   4,
+  //   0
+  // );
+
+  // for (int i = 0; i < 4; i++) {
+  //   v_p[i][0] = &v[i][0];
+  //   v_p[i][1] = &v[i][1];
+  //   v_pair_p[i] = &v[i];
+  // }
 
 
-  getOpsFromSingle(s_i, s_ref, s_i_len, s_ref_len, n, 10, 10, del, ins, cmb, s_del, s_plh, s_cmb, 1, 3);
+  // const long s_i_len = 25;
+  // const long s_ref_len = 25;
+  // const long n = 2;
+  // const long *s_i = new long[25 * n]{
+  //   // 0, 981, 6739, 18, 25844, 12231, 276, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  //   0, 3, 3, 3, 3, 3, 3, 8, 807, 3, 7, 11456, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 77, 5, 2,
+  //   0, 46, 7, 276, 21814, 8, 7, 807, 17853, 5, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+  // };
+  // const long *s_ref = new long[25]{
+  //   0, 276, 5, 4375, 11456, 26, 7, 273, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+  // };
+
+  // const long s_i_len = 10;
+  // const long s_ref_len = 10;
+  // const long n = 1;
+  // const long *s_i = new long[25 * n]{
+  //   0, 5, 3, 276, 11456, 3, 5, 8, 807, 2
+  // };
+  // const long *s_ref = new long[25]{
+  //   0, 276, 5, 4375, 11456, 26, 7, 273, 2, 1
+  // };
+
+  // long *s_del = new long[25 * n];
+  // long *s_plh = new long[25 * n];
+  // long *s_cmb = new long[25 * n];
+  // long *del = new long[25 * n];
+  // long *ins = new long[25 * n];
+  // long *cmb = new long[25 * n];
+
+
+  // getOpsFromSingle(s_i, s_ref, s_i_len, s_ref_len, n, 5, 10, del, ins, cmb, s_del, s_plh, s_cmb, 1, 3);
 
   cout << "Hello World!";
+  return 0;
 }
 
 // void getOpsFromBatch(
