@@ -182,11 +182,11 @@ vector<Node> buildDAGFromGraph(vector<Edge> &graph, const long &max_valency)
 {
   vector<Node> dag = vector<Node>(graph.size() + 2, Node(0));
 
-  for (Edge const &edge : graph)
-  {
-    edge.printEdge();
-  }
-  cout << endl;
+  // for (Edge const &edge : graph)
+  // {
+  //   edge.printEdge();
+  // }
+  // cout << endl;
 
   // printGraph(graph); // print sorted graph of edges
 
@@ -403,9 +403,9 @@ vector<list<long>> backwardKBest(vector<vector<type_pair<long>>> &table, const l
       it != current.at(j - 1).path.rend();
       it++
     ) {
-      cout << *it << ">";
+      // cout << *it << ">";
     }
-    cout << endl;
+    // cout << endl;
   }
 
   return paths;
