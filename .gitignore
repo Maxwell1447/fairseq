@@ -134,3 +134,8 @@ experimental/*
 
 # Weights and Biases logs
 wandb/
+prev_output.npy
+tgt_tokens.npy
+workspace.code-workspace
+fairseq/clib/libnat2/.edit_dist.cpp.swo
+fairseq/clib/libnat2/.edit_dist.cpp.swp
