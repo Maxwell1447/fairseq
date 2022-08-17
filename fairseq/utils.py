@@ -249,7 +249,8 @@ def post_process_prediction(
 
 def write_formatted_ops_and_stages(
     src_str,
-    tgt_src,
+    tgt_str,
+    hyp_str,
     history_toks,
     history_ops,
     filename,
@@ -261,8 +262,11 @@ def write_formatted_ops_and_stages(
         f.write("""<p style="line-height:85%"><b>src: </b>""")
         f.write(src_str)
         f.write("""</p>\n<p style="line-height:85%"><b>tgt: </b>""")
-        f.write(tgt_src)
-        f.write("</p>\n")
+        f.write(tgt_str)
+        f.write("""</p><p style="line-height:85%"><b>hyp: </b>\n""")
+        f.write(hyp_str)
+        f.write("""</p>\n""")
+        
     for i in range(len(history_toks) - 1):
         if history_toks[i]["tokens"].dim() > 1:
             toks_list = [tgt_dict.string(
@@ -299,8 +303,17 @@ def write_formatted_ops_and_stages(
             for c in range(len(toks_list)):
                 for t in range(len(toks_list[c])):
                     op = history_ops[iii]["ops"][t + 1][c]
+                    if toks_list[c][t] == "":
+                        toks_list[c][t] = "■"
                     if op.item() > 0.5:
-                        toks_list[c][t] = """<span style="color:#000099"><u>""" + toks_list[c][t] + "</u></span>"
+                        toks_list[c][t] = "<u>" + toks_list[c][t] + "</u>"
+                    colorb = str(hex(int((1 - op.item()) * 0 + 250)))[2:].upper()
+                    colorg = str(hex(int((1 - op.item()) * 200)))[2:].upper()
+                    colorr = str(hex(int((1 - op.item()) * 200)))[2:].upper()
+                    if len(colorb) == 1: colorb = '0' + colorb
+                    if len(colorg) == 1: colorg = '0' + colorg
+                    if len(colorr) == 1: colorr = '0' + colorr
+                    toks_list[c][t] = f"""<span style="color:#{colorr}{colorg}{colorb}"><u>""" + toks_list[c][t] + "</u></span>"
         elif i == 3 or (i > 3 and (i % 3 == 0)):
             # tok
             next_toks_list = [tgt_dict.string(

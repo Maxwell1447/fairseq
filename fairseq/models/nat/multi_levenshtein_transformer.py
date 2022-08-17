@@ -510,6 +510,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             "out": del_out,
             "tgt": del_tgt,
             "mask": del_mask,
+            "factor": 0.2,
         }
         output["mask_ins"] = {
             "out": plh_out,
@@ -617,7 +618,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             # print("attttttttttn", attn.shape)
 
             if history is not None:
-                history.append(output_tokens.clone() if can_del_word.sum() != 0 else None)
+                history.append(output_tokens.clone())
             if history_ops is not None:
                 history_ops.append(("del", self.scatter_del(del_pred, can_del_word)))
 
@@ -654,7 +655,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             # print("after plh >>>", output_tokens.shape, output_scores.shape)
 
             if history is not None:
-                history.append(output_tokens.clone() if can_plh.sum() != 0 else None)
+                history.append(output_tokens.clone())
             if history_ops is not None:
                 history_ops.append(("plh", self.scatter_plh(plh_pred, can_plh)))
 
@@ -741,7 +742,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             # print("after tok >>>", output_tokens.shape, output_scores.shape)
 
             if history is not None:
-                history.append(output_tokens.clone() if can_tok.sum() != 0 else None)
+                history.append(output_tokens.clone())
         # if history_ops is not None:
         #     history_ops.append(can_tok.clone() if can_tok.sum() != 0 else None)
         #     history_ops.append(tok_pred.clone() if can_tok.sum() != 0 else None)
@@ -799,7 +800,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             attn = _fill_single(attn, can_del_word, _attn, 0.0)
 
             if history is not None:
-                history.append(output_tokens.clone() if can_del_word.sum() != 0 else None)
+                history.append(output_tokens.clone())
             if history_ops is not None:
                 history_ops.append(("del", self.scatter_del(del_pred, can_del_word)))
 
@@ -835,7 +836,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             output_scores = _fill_single(output_scores, can_plh, _scores, 0)
 
             if history is not None:
-                history.append(output_tokens.clone() if can_plh.sum() != 0 else None)
+                history.append(output_tokens.clone())
             if history_ops is not None:
                 history_ops.append(("plh", self.scatter_plh(plh_pred, can_plh)))
 
@@ -861,8 +862,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             output_scores = _fill_single(output_scores, can_tok, _scores, 0)
             attn = _fill_single(attn, can_tok, tok_attn, 0.0)
 
-        if history is not None:
-            history.append(output_tokens.clone() if can_tok.sum() != 0 else None)
+            if history is not None:
+                history.append(output_tokens.clone())
         # if history_ops is not None:
         #     history_ops.append(can_tok.clone() if can_tok.sum() != 0 else None)
         #     history_ops.append(tok_pred.clone() if can_tok.sum() != 0 else None)

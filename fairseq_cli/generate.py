@@ -376,6 +376,7 @@ def _main(cfg: DictConfig, output_file):
                             utils.write_formatted_ops_and_stages(
                                 src_str,
                                 target_str,
+                                hypo_str,
                                 hypo["history"], 
                                 hypo["history_ops"],
                                 cfg.generation.formatted_file,

@@ -284,7 +284,7 @@ class IterativeRefinementGenerator(object):
 
             
             if self.retain_history:
-                finalized_history_tokens = [h[terminated] if h is not None else h for h in decoder_out.history]
+                finalized_history_tokens = [h[terminated] for h in decoder_out.history]
                 finalized_history_ops = [(h[0], h[1][terminated]) for h in decoder_out.history_ops]
                 # print("decoder out history tokens :::::: ", finalized_history_tokens)
             
@@ -298,7 +298,6 @@ class IterativeRefinementGenerator(object):
                         None if finalized_attn is None else finalized_attn[i],
                     )
                 ]
-
                 if self.retain_history:
                     finalized[finalized_idxs[i]][0]["history"] = []
                     for j in range(len(finalized_history_tokens)):
