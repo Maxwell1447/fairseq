@@ -78,7 +78,7 @@ def pi_del(
     )
 
     tok_mask = mask.any(1)
-    sorted_ = mask.long().sort(-1, descending=True)
+    sorted_ = mask.long().sort(stable=True, descending=True, dim=-1)
     sorted_mask = sorted_[0].bool()
     y_plh[sorted_mask] = y_star_n[mask]
     y_cmb[y_star_n.ne(pad_symbol)] = plh_symbol
@@ -110,6 +110,75 @@ def pi_del(
         "y_plh": y_plh,
         "y_cmb": y_cmb,
         "y_tok": y_tok,
+    }
+
+
+def pi_del_single(
+    # input_len,
+    y_tgt_star,
+    pad_symbol=0,
+    plh_symbol=0,
+    bos_symbol=0,
+    eos_symbol=0,
+    Kmax=100,
+    mode="uniform_length",
+    device="cpu",
+):
+    """Operations and states to edit a partially deleted version of y_star back to y_star."""
+    # y_tgt_star : B x M
+    shape = list(y_tgt_star.shape)
+    # shape[1] = input_len
+
+    plh_tgt = -torch.ones(
+        (shape[0], shape[1] - 1), dtype=torch.long, device=device
+    )
+    y_plh = torch.full(
+        (shape[0], shape[1]), pad_symbol, dtype=torch.long, device=device
+    )
+
+    if mode == "uniform_length":
+        tgt_mask = y_tgt_star.eq(pad_symbol)
+        lengths = y_tgt_star.ne(pad_symbol).sum(-1)
+        score_select = y_tgt_star.clone().float().uniform_()
+        score_select.masked_fill_(
+            y_tgt_star.eq(eos_symbol) | y_tgt_star.eq(bos_symbol),
+            0.
+        )
+        score_select.masked_fill_(
+            tgt_mask,
+            1.
+        )
+        
+        cutoff = 2 + ((lengths - 2) * score_select.new_zeros(y_tgt_star.size(0), 1).uniform_()).long()
+        # print("cutoff", cutoff, "/", lengths)
+        # print("select", score_select)
+        mask = score_select.sort(1)[1] < cutoff
+    else:
+        # mask of what is kept
+        mask = (
+            ((torch.rand(y_tgt_star.shape, device=device) > 0.2) & (y_tgt_star.ne(pad_symbol)))
+            | (y_tgt_star == bos_symbol)
+            | (y_tgt_star == eos_symbol)
+        )
+
+    sorted_ = mask.long().sort(stable=True, descending=True, dim=-1)
+    sorted_mask = sorted_[0].bool()
+    # print(y_plh.shape, sorted_mask.shape, y_tgt_star.shape, mask.shape)
+    y_plh[sorted_mask] = y_tgt_star[mask]
+
+    idx = sorted_[1]
+
+    plh_tgt = idx[:, 1:] - idx[:, :-1] - 1
+    plh_tgt[~sorted_mask[:, 1:]] = 0
+    plh_tgt = plh_tgt.clamp(0, Kmax - 1)
+
+    plh_mask = y_plh.ne(pad_symbol)[:, 1:]
+
+
+    return {
+        "plh_tgt": plh_tgt,
+        "plh_mask": plh_mask,
+        "y_plh": y_plh,
     }
 
 
