@@ -27,6 +27,7 @@ from .levenshtein_utils import (
 
 from .multi_levenshtein_utils import (
     pi_del,
+    pi_del_single,
     pi_sel,
     pi_mask,
     pi_star,
@@ -220,18 +221,18 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         mask_star = self.get_mask_from_prob(prev_output_tokens.size(0), self.beta) # for pi del
         with torch.no_grad():
 
-            print("max val", self.max_valency)
-            print("K max", self.Kmax)
-            print(self.pad, self.unk)
+            # print("max val", self.max_valency)
+            # print("K max", self.Kmax)
+            # print(self.pad, self.unk)
 
-            torch.save(
-                prev_output_tokens[mask_star][mask_good[mask_star]].cpu(),
-                "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/prev_output.npy"
-            )
-            torch.save(
-                tgt_tokens[mask_star][mask_good[mask_star]].cpu(),
-                "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/tgt_tokens.npy"
-            )
+            # torch.save(
+            #     prev_output_tokens[mask_star][mask_good[mask_star]].cpu(),
+            #     "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/prev_output.npy"
+            # )
+            # torch.save(
+            #     tgt_tokens[mask_star][mask_good[mask_star]].cpu(),
+            #     "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/tgt_tokens.npy"
+            # )
             res_star = pi_star(
                 prev_output_tokens[mask_star][mask_good[mask_star]],
                 tgt_tokens[mask_star][mask_good[mask_star]],
@@ -252,12 +253,12 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             # print([(res_star["y_cmb"] == self.eos).sum(-1)])
             # print("bos = ", self.bos)
             # 19
-            print(torch.arange(mask_star.size(0), device=prev_output_tokens.device)[mask_star][mask_good[mask_star]][(res_star["y_cmb"] == self.bos).sum(-1).ne(1).any(-1)])
-            print("tgt ???", tgt_tokens[mask_star][mask_good[mask_star]][(res_star["y_cmb"] == self.bos).sum(-1).ne(1).any(-1)])
-            print("ids", ids[mask_star][mask_good[mask_star]][(res_star["y_cmb"] == self.bos).sum(-1).ne(1).any(-1)])
-            print("y_del where no bos/eos: ", (prev_output_tokens[mask_star][mask_good[mask_star]][(res_star["y_cmb"] == self.bos).sum(-1).ne(1)]).tolist())
-            print("y_plh where no bos/eos: ", (res_star["y_plh"][(res_star["y_cmb"] == self.bos).sum(-1).ne(1)]).tolist())
-            print("y_cmb where no bos/eos: ", (res_star["y_cmb"][(res_star["y_cmb"] == self.bos).sum(-1).ne(1)]).tolist())
+            # print(torch.arange(mask_star.size(0), device=prev_output_tokens.device)[mask_star][mask_good[mask_star]][(res_star["y_cmb"] == self.bos).sum(-1).ne(1).any(-1)])
+            # print("tgt ???", tgt_tokens[mask_star][mask_good[mask_star]][(res_star["y_cmb"] == self.bos).sum(-1).ne(1).any(-1)])
+            # print("ids", ids[mask_star][mask_good[mask_star]][(res_star["y_cmb"] == self.bos).sum(-1).ne(1).any(-1)])
+            # print("y_del where no bos/eos: ", (prev_output_tokens[mask_star][mask_good[mask_star]][(res_star["y_cmb"] == self.bos).sum(-1).ne(1)]).tolist())
+            # print("y_plh where no bos/eos: ", (res_star["y_plh"][(res_star["y_cmb"] == self.bos).sum(-1).ne(1)]).tolist())
+            # print("y_cmb where no bos/eos: ", (res_star["y_cmb"][(res_star["y_cmb"] == self.bos).sum(-1).ne(1)]).tolist())
             assert ((res_star["y_cmb"] == self.eos).sum(-1) == 1).all().item(), ((res_star["y_cmb"] == self.bos).sum(-1) == 1).all().item()
             res_star["del_tgt"] = 1 - res_star["del_tgt"]
             res_star["del_tgt"][~res_star["del_mask"]] = 0
@@ -336,34 +337,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 Kmax=self.Kmax,
                 device=src_tokens.device,
             )
-            mask_not_self_target = self.get_mask_from_prob(prev_output_tokens.size(0), self.eps) # for pi del
-            res_post_del = pi_del(
-                prev_output_tokens[mask_not_self_target].shape,
-                tgt_tokens[mask_not_self_target],
-                pad_symbol=self.pad,
-                plh_symbol=self.unk,
-                bos_symbol=self.bos,
-                eos_symbol=self.eos,
-                Kmax=self.Kmax,
-                device=src_tokens.device,
-            )
-            res_post_del["y_plh"] = res_post_del["y_plh"][:, 0]
-            res_post_del["plh_tgt"] = res_post_del["plh_tgt"][:, 0]
-            res_post_del["plh_mask"] = res_post_del["plh_mask"][:, 0]
-            res_post_del = self.combine_res(
-                {
-                    "plh_tgt": torch.zeros_like(tgt_tokens[~mask_not_self_target][:, 1:]),
-                    "plh_mask": tgt_tokens[~mask_not_self_target][:, 1:].ne(self.pad),
-                    "y_plh": tgt_tokens[~mask_not_self_target],
-                },
-                res_post_del,
-                ~mask_not_self_target,
-            )
             res_del["del_tgt"] = 1 - res_del["del_tgt"]
             res_del["del_tgt"][~res_del["del_mask"]] = 0
-            y_post_plh = res_post_del["y_plh"]
-            post_plh_tgt = res_post_del["plh_tgt"]
-            post_plh_mask = res_post_del["plh_mask"]
 
             res_star = self.combine_res(res_star, res_del, mask_star)
 
@@ -391,6 +366,36 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 device=src_tokens.device,
             )
             cmb_tgt = handle_all_plh_case(cmb_tgt, y_tok, y_cmb, self.unk)
+
+            ### POST PLH
+            mask_not_self_target = self.get_mask_from_prob(prev_output_tokens.size(0), self.eps) # for pi del
+            res_post_del = pi_del_single(
+                # prev_output_tokens[mask_not_self_target].shape,
+                tgt_tokens[mask_not_self_target],
+                pad_symbol=self.pad,
+                plh_symbol=self.unk,
+                bos_symbol=self.bos,
+                eos_symbol=self.eos,
+                Kmax=self.Kmax,
+                device=src_tokens.device,
+            )
+            # res_post_del["y_plh"] = res_post_del["y_plh"][:, 0]
+            # res_post_del["plh_tgt"] = res_post_del["plh_tgt"][:, 0]
+            # res_post_del["plh_mask"] = res_post_del["plh_mask"][:, 0]
+            res_post_del = self.combine_res(
+                {
+                    "plh_tgt": torch.zeros_like(tgt_tokens[~mask_not_self_target][:, 1:]),
+                    "plh_mask": tgt_tokens[~mask_not_self_target][:, 1:].ne(self.pad),
+                    "y_plh": tgt_tokens[~mask_not_self_target],
+                },
+                res_post_del,
+                ~mask_not_self_target,
+            )
+            
+            y_post_plh = res_post_del["y_plh"]
+            post_plh_tgt = res_post_del["plh_tgt"]
+            post_plh_mask = res_post_del["plh_mask"]
+            
 
             mask_mask = self.get_mask_from_prob(y_tok.size(0), self.delta)
             y_tok[~mask_mask], tok_tgt[~mask_mask], tok_mask[~mask_mask] = pi_mask(

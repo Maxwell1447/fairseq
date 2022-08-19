@@ -14,6 +14,7 @@ import os
 import sys
 from argparse import Namespace
 from itertools import chain
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -193,11 +194,10 @@ def _main(cfg: DictConfig, output_file):
     num_sentences = 0
     has_target = True
     wps_meter = TimeMeter()
-    for sample in progress:
+    for sample in tqdm(itr):
         sample = utils.move_to_cuda(sample) if use_cuda else sample
         if "net_input" not in sample:
             continue
-
         prefix_tokens = None
         if cfg.generation.prefix_size > 0:
             prefix_tokens = sample["target"][:, : cfg.generation.prefix_size]
