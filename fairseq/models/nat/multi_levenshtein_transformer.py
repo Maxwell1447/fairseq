@@ -515,7 +515,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             "out": del_out,
             "tgt": del_tgt,
             "mask": del_mask,
-            "factor": 0.2,
+            "factor": 0.5,
         }
         output["mask_ins"] = {
             "out": plh_out,
@@ -550,6 +550,13 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 "out": post_del_extra_out,
                 "tgt": post_del_extra_tgt,
                 "mask": post_del_extra_mask,
+            }
+        else:
+            output["post_word_del_extra"] = {
+                "out": post_plh_out.new(1, 1, 2).fill_(0),
+                "tgt": post_plh_tgt.new(1, 1).fill_(0),
+                "mask": post_plh_mask.new(1, 1).fill_(1),
+                "factor": 1.0,
             }
 
         return output      

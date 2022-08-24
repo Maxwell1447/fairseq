@@ -148,11 +148,12 @@ def pi_del_single(
             tgt_mask,
             1.
         )
-        
-        cutoff = 2 + ((lengths - 2) * score_select.new_zeros(y_tgt_star.size(0), 1).uniform_()).long()
+        cutoff = 2 + ((lengths - 2).unsqueeze(1) * score_select.new_zeros(y_tgt_star.size(0), 1).uniform_()).long()
         # print("cutoff", cutoff, "/", lengths)
         # print("select", score_select)
+        # print("shapes", score_select.sort(1)[1].shape, cutoff.shape)
         mask = score_select.sort(1)[1] < cutoff
+        # print(mask.long())
     else:
         # mask of what is kept
         mask = (

@@ -398,67 +398,90 @@ def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
 
     # forward_loss(for_loss)
 
-lmd = load_lang_multi_dataset(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin",
-    "train",
-    "fr",
-    src_dict,
-    "en",
-    tgt_dict,
-    3,
-    True,
-    "mmap",
-    -1,
-    True,
-    False,
-    1024,
-    1024,
-    prepend_bos=True,
-)
+# lmd = load_lang_multi_dataset(
+#     "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin",
+#     "train",
+#     "fr",
+#     src_dict,
+#     "en",
+#     tgt_dict,
+#     3,
+#     True,
+#     "mmap",
+#     -1,
+#     True,
+#     False,
+#     1024,
+#     1024,
+#     prepend_bos=True,
+# )
+torch.manual_seed(0) 
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # 139552, 154425
 # 116611, 27889
 
-# sample = lmd[27889]
+# sample = lmd[100]
 
 # print(sample)
 
 # print("(S)  >>> ", src_dict.string(sample["source"], None))
 # print("(T)  >>> ", tgt_dict.string(sample["target"], None))
-# for i in range(3):
-#     print(f"(S{i}) >>> ", tgt_dict.string(sample["multi_source"][i], None))
+# tgt_toks = sample["target"].unsqueeze(0)
+# src_toks = sample["source"].unsqueeze(0)*
 
-# dt, cov = test_artificial_align(sample_=lmd[116611], max_valency=10, k=10, device=device)
-# 4 8 17
-
-prev_output_tokens = torch.load("/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/prev_output.npy")
-tgt_tokens = torch.load("/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/tgt_tokens.npy")
-
-# mask_debug = torch.zeros(tgt_tokens.size(0), dtype=bool)
-# mask_debug[4] = True
-# mask_debug[8] = True
-# mask_debug[17] = True
-mask_debug = torch.tensor([17])
-
-prev_output_tokens = prev_output_tokens[mask_debug]
-tgt_tokens = tgt_tokens[mask_debug]
-
-res_star = pi_star(
-    prev_output_tokens,
-    tgt_tokens,
-    max_valency=10,
+tgt_toks = torch.tensor([
+    [0, 4, 6, 8, 9, 6, 7, 10, 12, 15, 14, 18, 15, 19, 17, 16, 2, 1, 1, 1, 1, 1, 1, 1],
+    [0, 4, 6, 8, 9, 6, 7, 10, 12, 15, 14, 18, 15, 19, 17, 16, 18, 19, 20, 21, 22, 23, 2, 1]
+])
+print("tgt", tgt_toks)
+res_pi_del_single = pi_del_single(
+    # tgt_toks.size(1) + 2,
+    tgt_toks,
     pad_symbol=1,
-    plh_symbol=3,
+    plh_symbol=0,
+    bos_symbol=0,
+    eos_symbol=2,
     Kmax=64,
-    device=device,
+    device=device
 )
-print((res_star["y_cmb"] == 0).sum(-1).ne(1).any(-1))
-print(torch.arange(tgt_tokens.size(0), device=prev_output_tokens.device)[(res_star["y_cmb"] == 0).sum(-1).ne(1).any(-1)])
-print("tgt ???", tgt_tokens[(res_star["y_cmb"] == 0).sum(-1).ne(1).any(-1)])
-print("y_del where no bos/eos: ", (prev_output_tokens[(res_star["y_cmb"] == 0).sum(-1).ne(1)]).tolist())
-print("y_plh where no bos/eos: ", (res_star["y_plh"][(res_star["y_cmb"] == 0).sum(-1).ne(1)]).tolist())
-print("y_cmb where no bos/eos: ", (res_star["y_cmb"][(res_star["y_cmb"] == 0).sum(-1).ne(1)]).tolist())
+print("plh_tgt", res_pi_del_single["plh_tgt"])
+print("y_plh", res_pi_del_single["y_plh"])
+
+# # for i in range(3):
+# #     print(f"(S{i}) >>> ", tgt_dict.string(sample["multi_source"][i], None))
+
+# # dt, cov = test_artificial_align(sample_=lmd[116611], max_valency=10, k=10, device=device)
+# # 4 8 17
+
+# prev_output_tokens = torch.load("/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/prev_output.npy")
+# tgt_tokens = torch.load("/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/tgt_tokens.npy")
+
+# # mask_debug = torch.zeros(tgt_tokens.size(0), dtype=bool)
+# # mask_debug[4] = True
+# # mask_debug[8] = True
+# # mask_debug[17] = True
+# mask_debug = torch.tensor([17])
+
+# prev_output_tokens = prev_output_tokens[mask_debug]
+# tgt_tokens = tgt_tokens[mask_debug]
+
+# res_star = pi_star(
+#     prev_output_tokens,
+#     tgt_tokens,
+#     max_valency=10,
+#     pad_symbol=1,
+#     plh_symbol=3,
+#     Kmax=64,
+#     device=device,
+# )
+# print((res_star["y_cmb"] == 0).sum(-1).ne(1).any(-1))
+# print(torch.arange(tgt_tokens.size(0), device=prev_output_tokens.device)[(res_star["y_cmb"] == 0).sum(-1).ne(1).any(-1)])
+# print("tgt ???", tgt_tokens[(res_star["y_cmb"] == 0).sum(-1).ne(1).any(-1)])
+# print("y_del where no bos/eos: ", (prev_output_tokens[(res_star["y_cmb"] == 0).sum(-1).ne(1)]).tolist())
+# print("y_plh where no bos/eos: ", (res_star["y_plh"][(res_star["y_cmb"] == 0).sum(-1).ne(1)]).tolist())
+# print("y_cmb where no bos/eos: ", (res_star["y_cmb"][(res_star["y_cmb"] == 0).sum(-1).ne(1)]).tolist())
 
 
 # for max_valency in [1, 5, 10, -1]:
