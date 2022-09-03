@@ -47,6 +47,7 @@ def pi_del(
     bos_symbol=0,
     eos_symbol=0,
     Kmax=100,
+    mode="binomial",
     device="cpu",
 ):
     """Operations and states to edit a partially deleted version of y_star back to y_star."""
@@ -71,11 +72,15 @@ def pi_del(
     y_star_n = y_tgt_star.view(shape[0], 1, shape[-1]).expand(shape)
 
     # tok_mask = torch.zeros_like(y_star_n, dtype=bool, device=device)
-    mask = (
-        ((torch.rand(y_star_n.shape, device=device) > 0.2) & (y_star_n.ne(pad_symbol)))
-        | (y_star_n == bos_symbol)
-        | (y_star_n == eos_symbol)
-    )
+    if mode == "uniform":
+        raise NotImplementedError(f"{mode} not implemented")
+        ...
+    else:
+        mask = (
+            ((torch.rand(y_star_n.shape, device=device) > 0.2) & (y_star_n.ne(pad_symbol)))
+            | (y_star_n == bos_symbol)
+            | (y_star_n == eos_symbol)
+        )
 
     tok_mask = mask.any(1)
     sorted_ = mask.long().sort(stable=True, descending=True, dim=-1)
@@ -151,8 +156,17 @@ def pi_del_single(
         cutoff = 2 + ((lengths - 2).unsqueeze(1) * score_select.new_zeros(y_tgt_star.size(0), 1).uniform_()).long()
         # print("cutoff", cutoff, "/", lengths)
         # print("select", score_select)
-        # print("shapes", score_select.sort(1)[1].shape, cutoff.shape)
-        mask = score_select.sort(1)[1] < cutoff
+        # print("sorted select", score_select.sort(1)[1])
+        mask_index = torch.arange(shape[1], dtype=torch.long, device=device)[None, :].expand_as(y_tgt_star) < cutoff
+        indexes = score_select.sort(dim=1, stable=True)[1]
+        indexes[~mask_index] = 0
+        mask = torch.zeros_like(tgt_mask)
+        # print(indexes)
+        batch_index = torch.arange(shape[0], dtype=torch.long, device=device)[:, None].expand_as(y_tgt_star)
+        mask[batch_index, indexes] = True
+        # mask = score_select.sort(dim=1, stable=True)[1] < cutoff
+        # print("mask", mask)
+        
         # print(mask.long())
     else:
         # mask of what is kept

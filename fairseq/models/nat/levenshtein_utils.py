@@ -10,15 +10,8 @@ from fairseq.utils import new_arange
 # -------------- Helper Functions --------------------------------------------------- #
 
 
-def load_libnat():
-    try:
-        from fairseq import libnat_cuda
-
-        return libnat_cuda, True
-
-    except ImportError as e:
-        print(str(e) + "... fall back to CPU version")
-
+def load_libnat(device=None):
+    if device == torch.device("cpu"):
         try:
             from fairseq import libnat
 
@@ -31,6 +24,27 @@ def load_libnat():
                 "ERROR: missing libnat_cuda. run `python setup.py build_ext --inplace`\n"
             )
             raise e
+    else:
+        try:
+            from fairseq import libnat_cuda
+
+            return libnat_cuda, True
+
+        except ImportError as e:
+            print(str(e) + "... fall back to CPU version")
+
+            try:
+                from fairseq import libnat
+
+                return libnat, False
+
+            except ImportError as e:
+                import sys
+
+                sys.stderr.write(
+                    "ERROR: missing libnat_cuda. run `python setup.py build_ext --inplace`\n"
+                )
+                raise e
 
 
 def _get_ins_targets(in_tokens, out_tokens, padding_idx, unk_idx):
@@ -101,8 +115,8 @@ def _get_ins_targets(in_tokens, out_tokens, padding_idx, unk_idx):
     return _get_ins_targets_cpu(in_tokens, out_tokens, padding_idx, unk_idx)
 
 
-def _get_del_targets(in_tokens, out_tokens, padding_idx):
-    libnat, use_cuda = load_libnat()
+def _get_del_targets(in_tokens, out_tokens, padding_idx, device=None):
+    libnat, use_cuda = load_libnat(device)
 
     def _get_del_targets_cuda(in_tokens, out_tokens, padding_idx):
         in_masks = in_tokens.ne(padding_idx)

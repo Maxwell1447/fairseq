@@ -228,7 +228,9 @@ class IterativeRefinementGenerator(object):
             print("iteration ", str(step))
 
             decoder_options = {
-                "eos_penalty": self.eos_penalty,
+                "eos_penalty":
+                    0. if (step == 0) else
+                    self.eos_penalty,
                 "max_ratio": self.max_ratio,
                 "decoding_format": self.decoding_format,
             }

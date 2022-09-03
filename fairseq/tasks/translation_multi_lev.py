@@ -474,7 +474,7 @@ class TranslationMultiLevenshteinTask(TranslationTask):
         return IterativeRefinementGenerator(
             self.target_dictionary,
             beam_size=getattr(args, "decode_with_beam", 1),
-            eos_penalty=getattr(args, "decode_eos_penalty", 0.0),
+            eos_penalty=getattr(args, "iter_decode_eos_penalty", 0.0),
             max_ratio=getattr(args, "decode_max_ratio", None),
             max_iter=getattr(args, "iter_decode_max_iter", 10),
             retain_history=getattr(args, "retain_iter_history", False),

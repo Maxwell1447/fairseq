@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 from torch import Tensor
+from fairseq import libdual_cuda
 import os
 
 
@@ -26,14 +27,14 @@ class DualEncodingLoss(FairseqCriterion):
         """Add criterion-specific arguments to the parser."""
         parser.add_argument(
             "--label-smoothing",
-            default=0.0,
+            default=0.1,
             type=float,
             metavar="D",
             help="epsilon for label smoothing, 0 means no label smoothing",
         )
 
     def _compute_loss(
-        self, encoding_x, encoding_y, label_smoothing=0.0
+        self, encoding_x, encoding_y
     ):
         """
         encoding_x: batch x d_model
@@ -41,27 +42,47 @@ class DualEncodingLoss(FairseqCriterion):
         """
         s_xy = torch.matmul(encoding_x, encoding_y.T)
 
-        loss = - s_xy.diag()
-        norm = torch.logsumexp(s_xy, dim=-1)
-        loss = (loss + norm).sum()
-        if label_smoothing > 0.0:
-            loss_ls = s_xy.sum() / s_xy.size(0) - norm.sum()
-            loss = label_smoothing * loss + (1 - label_smoothing) * loss_ls
-        return loss / encoding_x.size(0)
+        # loss = - s_xy.diag()
+        # norm = torch.logsumexp(s_xy, dim=-1)
+        # loss = (loss + norm).sum()
+        loss = -torch.nn.functional.log_softmax(s_xy, dim=1).diag().mean()
 
-    def _compute_bag_of_word_loss(self, logits, tokens, lengths, label_smoothing=0.0):
+        if self.label_smoothing > 0.0:
+            # loss_ls = -(s_xy.sum() / s_xy.size(0) - norm.sum())
+            loss_ls = -torch.nn.functional.log_softmax(s_xy, dim=1).mean(-1).mean()
+            # with torch.no_grad():
+            #     print("other ls = ", -torch.nn.functional.log_softmax(s_xy, dim=1).mean(-1).sum())
+            # print(
+            #     "\n\n\n---------loss alignment--------",
+            #     "\nloss=", loss.detach().cpu().item(),
+            #     "\nloss_ls=", loss_ls.detach().cpu().item(),
+            #     "\ns_xy=", s_xy.detach().sum().cpu().item(),
+            #     "\nbsz=", s_xy.size(0)
+            # )
+            loss = (1 - self.label_smoothing) * loss + self.label_smoothing * loss_ls
+        # else:
+        #     print("no label smoothing")
+            
+        return loss
+
+    def _compute_bag_of_word_loss(self, logits, tokens, bos=0, eos=2, pad=1, factor=1.):
         """
-        encoding_x: batch x d_model
-        encoding_y: batch x d_model
+        logits: batch x voc_size
+        tokens: batch x length
         """
-        bow_mask = torch.arange(tokens.size(1))[None, :].expand_as(tokens) < lengths
-        tokens[~bow_mask]
-        norm = torch.logsumexp(logits, dim=-1)
+        # batch x voc_size
+        bow_mask = libdual_cuda.get_bow_mask_from_sequence(tokens, logits.size(1), bos, eos, pad)
 
-        return logits.new_zeros(1)[0]
+        loss = -torch.nn.functional.log_softmax(logits, dim=1)[bow_mask.bool()]
 
-    def _custom_loss(self, loss, name="loss", factor=1.0):
-        return {"name": name, "loss": loss, "factor": factor}
+        # norm = torch.logsumexp(logits, dim=-1)
+
+        # # print(logits.shape, bow_mask.shape, norm.shape)
+        # print("bow size", bow_mask.sum(-1).float().mean().data.item())
+
+        # loss = -(logits * bow_mask).sum(-1) + norm * bow_mask.sum(-1)
+
+        return loss.mean() * factor
 
     def forward(self, model, sample, reduce=True):
         """Compute the loss for the given sample.
@@ -71,7 +92,6 @@ class DualEncodingLoss(FairseqCriterion):
         3) logging outputs to display while training
         """
         nsentences, ntokens = sample["nsentences"], sample["ntokens"]
-
         # B x L
         src_tokens, src_lengths = (
             sample["net_input"]["src_tokens"],
@@ -81,41 +101,45 @@ class DualEncodingLoss(FairseqCriterion):
             sample["net_input"]["tgt_tokens"],
             sample["net_input"]["tgt_lengths"],
         )
-        
+        # print("src", src_tokens.shape)
+        # print("tgt", tgt_tokens.shape)
         outputs = model(src_tokens, src_lengths, tgt_tokens, tgt_lengths)
-        loss = self._compute_loss(
+        loss_align = self._compute_loss(
             outputs["encoder_src_out"],
             outputs["encoder_tgt_out"],
         )
+        # print(">>> loss   = ", loss_align.data.item())
+        sample_size = 1
+        logging_output = dict()
+        
 
         if self.bag_of_word:
-            
+            assert "src_bow_logits" in outputs
+            assert "tgt_bow_logits" in outputs
             loss_bow_src = self._compute_bag_of_word_loss(
                 outputs["src_bow_logits"],
-                src_tokens,
-                src_lengths
+                tgt_tokens,
             )
             loss_bow_tgt = self._compute_bag_of_word_loss(
                 outputs["tgt_bow_logits"],
-                tgt_tokens,
-                tgt_lengths
+                src_tokens,
             )
             logging_output["bow_src_loss"] = loss_bow_src.data
             logging_output["bow_tgt_loss"] = loss_bow_tgt.data
-            loss += loss_bow_src + loss_bow_tgt
+            # print("+++ losses = ", loss_bow_src.data.item(), loss_bow_tgt.data.item())
+            loss = loss_align + loss_bow_src + loss_bow_tgt
+        else:
+            loss = loss_align
 
-        # NOTE:
-        # we don't need to use sample_size as denominator for the gradient
-        # here sample_size is just used for logging
-        sample_size = 1
-        logging_output = {
+        logging_output.update({
             "loss": loss.data,
             "nll_loss": loss.data,
+            "align_loss": loss_align.data,
             "ntokens": ntokens,
             "nsentences": nsentences,
             "sample_size": sample_size,
-        }
-
+        })
+        
         return loss, sample_size, logging_output
 
     @staticmethod
@@ -125,18 +149,38 @@ class DualEncodingLoss(FairseqCriterion):
             sum(log.get("sample_size", 0) for log in logging_outputs)
         )
         loss = utils.item(sum(log.get("loss", 0) for log in logging_outputs))
+        nll_loss = utils.item(sum(log.get("nll_loss", 0) for log in logging_outputs))
+        align_loss = utils.item(sum(log.get("align_loss", 0) for log in logging_outputs))
+        # print("logged loss", loss)
+        # print("logged nll_loss", loss)
+        # print("logged align_loss", align_loss)
         metrics.log_scalar(
-            "alignment_loss", loss / sample_size / math.log(2), sample_size, round=3
+            "loss", loss / sample_size / math.log(2), sample_size, round=3
         )
-
-        if "bag_of_word_loss" in logging_outputs:
-            bag_of_word_loss = utils.item(sum(log["bag_of_word_loss"]for log in logging_outputs))
-            metrics.log_scalar(
-                "bag_of_word_loss",
-                bag_of_word_loss / sample_size / math.log(2) if sample_size > 0 else 0.0,
-                sample_size,
-                round=3,
-            )
+        metrics.log_scalar(
+            "nll_loss", nll_loss / sample_size / math.log(2), sample_size, round=3
+        )
+        metrics.log_scalar(
+            "align_loss", align_loss / sample_size / math.log(2), sample_size, round=3
+        )
+        for log_ in logging_outputs:
+            if "bow_src_loss" in log_:
+                bow_src_loss = utils.item(sum(log["bow_src_loss"]for log in logging_outputs))
+                metrics.log_scalar(
+                    "bow_src_loss",
+                    bow_src_loss / sample_size / math.log(2) if sample_size > 0 else 0.0,
+                    sample_size,
+                    round=3,
+                )
+            if "bow_tgt_loss" in log_:
+                bow_tgt_loss = utils.item(sum(log["bow_tgt_loss"]for log in logging_outputs))
+                metrics.log_scalar(
+                    "bow_tgt_loss",
+                    bow_tgt_loss / sample_size / math.log(2) if sample_size > 0 else 0.0,
+                    sample_size,
+                    round=3,
+                )
+            break
 
     @staticmethod
     def logging_outputs_can_be_summed() -> bool:

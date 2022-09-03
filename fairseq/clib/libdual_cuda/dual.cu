@@ -26,13 +26,10 @@ __global__ void get_bag_of_word_kernel(
         const int pad
     ) {
 
-    // const int b = blockIdx.x;
-    // const int i = threadIdx.x;
-    // const index = b * sequence_size + i;
     const int index = blockIdx.x * blockDim.x + threadIdx.x;
     const int tok_idx = sequence[index];
     const int bow_index = blockIdx.x * vocab_size + tok_idx;
-    if (index < N) {
+    if ((index < N) && (tok_idx < vocab_size) && (tok_idx >= 0)) {
         masked_bow[bow_index] = (tok_idx != bos) && (tok_idx != eos) && (tok_idx != pad);
     }
 }
@@ -51,8 +48,7 @@ torch::Tensor GetBOWCuda(
     at::TensorOptions options(sequence.device());
     options = options
         .dtype(sequence.dtype())
-        .layout(sequence.layout())
-        .device(sequence.device());
+        .layout(sequence.layout());
     auto masked_bow = torch::zeros({batch_size, voc_size}, options);
     auto stream = at::cuda::getCurrentCUDAStream(sequence.device().index());
     // ScalarType::Bool

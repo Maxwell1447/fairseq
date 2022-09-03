@@ -11,6 +11,7 @@ from fairseq import options, tasks, checkpoint_utils
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from fairseq.criterions.nat_loss import LabelSmoothedDualImitationCriterion
 from fairseq.data.multi_source_dataset import collate
+from fairseq.models.nat.levenshtein_utils import _apply_ins_masks
 
 
 # src_dict = Dictionary.load(
@@ -21,10 +22,10 @@ from fairseq.data.multi_source_dataset import collate
 # )
 
 src_dict = Dictionary.load(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin/dict.fr.txt"
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/wmt-14/3-NN-noised/data-bin/dict.fr.txt"
 )
 tgt_dict = Dictionary.load(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin/dict.en.txt"
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/wmt-14/3-NN-noised/data-bin/dict.en.txt"
 )
 
 
@@ -128,8 +129,8 @@ def load_model():
     # parser.add_argument("--share-all-embedding", action="store_true")
     # parser.add_argument("--dropout", default=0.3, type=float)
     parser.add_argument(
-        "--path", 
-        default="/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/models-small/transformer-multi-lev-fr-en-ecb-3NN/checkpoint_last.pt"
+        "--path",
+        default="/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/models-toy/transformer-multi-lev-fr-en-toy-3NN/checkpoint_last.pt"
     )
     args = options.parse_args_and_arch(parser)
     cfg = convert_namespace_to_omegaconf(args)
@@ -398,26 +399,37 @@ def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
 
     # forward_loss(for_loss)
 
-# lmd = load_lang_multi_dataset(
-#     "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-lev-DATA/ECB/data-bin",
-#     "train",
-#     "fr",
-#     src_dict,
-#     "en",
-#     tgt_dict,
-#     3,
-#     True,
-#     "mmap",
-#     -1,
-#     True,
-#     False,
-#     1024,
-#     1024,
-#     prepend_bos=True,
-# )
-torch.manual_seed(0) 
+lmd = load_lang_multi_dataset(
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/wmt-14/3-NN-noised/data-bin",
+    "train",
+    "fr",
+    src_dict,
+    "en",
+    tgt_dict,
+    3,
+    True,
+    "mmap",
+    -1,
+    True,
+    False,
+    1024,
+    1024,
+    prepend_bos=True,
+)
+torch.manual_seed(1) 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# in_toks = torch.tensor(
+#     [[0, 4, 5, 6, 7, 8, 9, 10, 2, 1, 1],
+#     [0, 11, 12, 13, 14, 15, 16, 17, 18, 2, 1]]
+# ).to(device)
+# mask_ins_pred = torch.tensor(
+#     [[0, 0, 0, 2, 0, 1, 2, 0, 0, 10],
+#     [1, 0, 0, 0, 4, 1, 0, 0, 0, 0]]
+# )
+
+# out_toks, _ = _apply_ins_masks(in_toks, None, mask_ins_pred, 1, 3, 2)
 
 # 139552, 154425
 # 116611, 27889
@@ -431,23 +443,23 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # tgt_toks = sample["target"].unsqueeze(0)
 # src_toks = sample["source"].unsqueeze(0)*
 
-tgt_toks = torch.tensor([
-    [0, 4, 6, 8, 9, 6, 7, 10, 12, 15, 14, 18, 15, 19, 17, 16, 2, 1, 1, 1, 1, 1, 1, 1],
-    [0, 4, 6, 8, 9, 6, 7, 10, 12, 15, 14, 18, 15, 19, 17, 16, 18, 19, 20, 21, 22, 23, 2, 1]
-])
-print("tgt", tgt_toks)
-res_pi_del_single = pi_del_single(
-    # tgt_toks.size(1) + 2,
-    tgt_toks,
-    pad_symbol=1,
-    plh_symbol=0,
-    bos_symbol=0,
-    eos_symbol=2,
-    Kmax=64,
-    device=device
-)
-print("plh_tgt", res_pi_del_single["plh_tgt"])
-print("y_plh", res_pi_del_single["y_plh"])
+# tgt_toks = torch.tensor([
+#     [0, 4, 6, 8, 9, 6, 7, 10, 12, 15, 14, 18, 15, 19, 17, 16, 2, 1, 1, 1, 1, 1, 1, 1],
+#     [0, 4, 6, 8, 9, 6, 7, 10, 12, 15, 14, 18, 15, 19, 17, 16, 18, 19, 20, 21, 22, 23, 2, 1]
+# ])
+# print("tgt", tgt_toks)
+# res_pi_del_single = pi_del_single(
+#     # tgt_toks.size(1) + 2,
+#     tgt_toks,
+#     pad_symbol=1,
+#     plh_symbol=0,
+#     bos_symbol=0,
+#     eos_symbol=2,
+#     Kmax=64,
+#     device=device
+# )
+# print("plh_tgt", res_pi_del_single["plh_tgt"])
+# print("y_plh", res_pi_del_single["y_plh"])
 
 # # for i in range(3):
 # #     print(f"(S{i}) >>> ", tgt_dict.string(sample["multi_source"][i], None))
@@ -517,9 +529,14 @@ print("y_plh", res_pi_del_single["y_plh"])
 
 # device = "cuda"
 # device = "cpu"
-# model = load_model()
+
+
+
+
+model = load_model()
 # model.max_valency = 2
-# model = model.to(device)
+model = model.to(device)
+model.eps = 0.
 # iterator_3000 = get_batch_iter(lmd)
 # data_iter = iterator_3000.next_epoch_itr(shuffle=False)
 # print(len(data_iter))
@@ -569,37 +586,53 @@ print("y_plh", res_pi_del_single["y_plh"])
     #     # break
 
 # model.full_mlevt = True
-# sample = [lmd[154425], lmd[139552]] #, 154425 139552
-# sample = [lmd[154425]]
-# sample = [lmd[139552]]
-# sample = [lmd[0]]
-# print("src: ", src_dict.string(sample[0]["source"], None))
-# for n in range(3):
-#     print("multi_src: ", tgt_dict.string(sample[0]["multi_source"][n], None))
-# print("tgt: ", tgt_dict.string(sample[0]["target"], None))
+sample = [lmd[1], lmd[2]] #, 154425 139552
+# # sample = [lmd[154425]]
+# # sample = [lmd[139552]]
+# # sample = [lmd[0]]
+print("src: ", src_dict.string(sample[0]["source"], None))
+for n in range(3):
+    print("multi_src: ", tgt_dict.string(sample[0]["multi_source"][n], None))
+print("tgt: ", tgt_dict.string(sample[0]["target"], None))
 
-# sample = collate(
-#     sample,
-#     tgt_dict.pad(),
-#     tgt_dict.eos(),
-#     left_pad_source=True,
-#     left_pad_target=False,
-#     input_feeding=True,
-#     pad_to_length=None,
-#     pad_to_multiple=1,
-# )
-# print(sample.keys())
-# src_tokens, src_lengths = (
-#     sample["net_input"]["src_tokens"].to(device),
-#     sample["net_input"]["src_lengths"].to(device),
-# )
-# sample["num_iter"] = 2
-# tgt_tokens = sample["target"].to(device)
-# multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
-# # with torch.no_grad():
-# #     outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, sample["num_iter"], ids=sample["id"])
 
-# # print(outputs)
+sample = collate(
+    sample,
+    tgt_dict.pad(),
+    tgt_dict.eos(),
+    left_pad_source=True,
+    left_pad_target=False,
+    input_feeding=True,
+    pad_to_length=None,
+    pad_to_multiple=1,
+)
+print("tgt tokens = ", sample["target"])
+# sys.exit(0)
+# # print(sample.keys())
+src_tokens, src_lengths = (
+    sample["net_input"]["src_tokens"].to(device),
+    sample["net_input"]["src_lengths"].to(device),
+)
+sample["num_iter"] = 2
+tgt_tokens = sample["target"].to(device)
+multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
+# res_post_del = pi_del_single(
+#     # prev_output_tokens[mask_not_self_target].shape,
+#     tgt_tokens,
+#     pad_symbol=tgt_dict.pad(),
+#     plh_symbol=tgt_dict.unk(),
+#     bos_symbol=tgt_dict.bos(),
+#     eos_symbol=tgt_dict.eos(),
+#     Kmax=64,
+#     device=src_tokens.device,
+# )
+# print(res_post_del)
+
+with torch.no_grad():
+    outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, sample["num_iter"], ids=sample["id"])
+
+print("post_word_del_extra tgt", outputs["post_word_del_extra"]["tgt"])
+print("post_word_del_extra msk", outputs["post_word_del_extra"]["mask"])
 
 
 # # multi_src_tokens, tgt_tokens = regularize_shapes(

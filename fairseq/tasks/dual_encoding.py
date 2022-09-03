@@ -80,6 +80,8 @@ class DualEncodingTask(TranslationTask):
         self, sample, model, criterion, optimizer, update_num, ignore_grad=False
     ):
         model.train()
+        sample["net_input"]["tgt_tokens"] = sample["target"]
+        sample["net_input"]["tgt_lengths"] = sample["target"].ne(model.pad_tgt).sum(-1)
         loss, sample_size, logging_output = criterion(model, sample)
         if ignore_grad:
             loss *= 0
@@ -88,6 +90,9 @@ class DualEncodingTask(TranslationTask):
 
     def valid_step(self, sample, model, criterion):
         model.eval()
+        sample["net_input"]["tgt_tokens"] = sample["target"]
+        sample["net_input"]["tgt_lengths"] = sample["target"].ne(model.pad_tgt).sum(-1)
         with torch.no_grad():
             loss, sample_size, logging_output = criterion(model, sample)
         return loss, sample_size, logging_output
+
