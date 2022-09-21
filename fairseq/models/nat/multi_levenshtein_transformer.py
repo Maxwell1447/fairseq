@@ -1244,8 +1244,10 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
         )  # batch x M x N x 2
 
         # decoder_out: batch x M x N
+        if normalize:
+            return F.log_softmax(decoder_out, -1), extra["attn"]
 
-        return decoder_out[:, :, :, :], extra["attn"]
+        return decoder_out, extra["attn"]
 
     @ensemble_decoder
     def forward_tok(self, normalize, encoder_out, prev_output_tokens, **unused):
