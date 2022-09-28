@@ -321,7 +321,8 @@ def write_formatted_ops_and_stages(
             ).split(" ")]
             for t in range(len(toks_list[0])):
                 if toks_list[0][t] == "<unk>":
-                    toks_list[0][t] = """<span style="color:#00EE00"><u>""" + next_toks_list[0][t] + "</u></span>"
+                    next_token = next_toks_list[0][t] if t < len(next_toks_list[0]) else "????"
+                    toks_list[0][t] = """<span style="color:#00EE00"><u>""" + next_token + "</u></span>"
         with open(filename, 'a') as f:
             name = "tok" if i == 3 or (i > 3 and (i % 3 == 0)) else history_ops[iii]['name']
             f.write("<hr>\n")

@@ -22,10 +22,12 @@ from fairseq.models.nat.levenshtein_utils import _apply_ins_masks
 # )
 
 src_dict = Dictionary.load(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/wmt-14/3-NN-noised/data-bin/dict.fr.txt"
+    # "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/wmt-14/3-NN-noised/data-bin/dict.fr.txt"
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/data-bin_0.4+bin/ECB/m<0.6/dict.en.txt"
 )
 tgt_dict = Dictionary.load(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/wmt-14/3-NN-noised/data-bin/dict.en.txt"
+    # "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/wmt-14/3-NN-noised/data-bin/dict.en.txt"
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/data-bin_0.4+bin/ECB/m<0.6/dict.fr.txt"
 )
 
 
@@ -400,12 +402,13 @@ def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
     # forward_loss(for_loss)
 
 lmd = load_lang_multi_dataset(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/wmt-14/3-NN-noised/data-bin",
-    "train",
-    "fr",
-    src_dict,
+    # "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/wmt-14/3-NN-noised/data-bin",
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/data-bin_0.4+bin/ECB/m<0.6",
+    "test",
     "en",
     tgt_dict,
+    "fr",
+    src_dict,
     3,
     True,
     "mmap",
@@ -533,10 +536,10 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 
-model = load_model()
+# model = load_model()
 # model.max_valency = 2
-model = model.to(device)
-model.eps = 0.
+# model = model.to(device)
+# model.eps = 0.
 # iterator_3000 = get_batch_iter(lmd)
 # data_iter = iterator_3000.next_epoch_itr(shuffle=False)
 # print(len(data_iter))
@@ -606,6 +609,7 @@ sample = collate(
     pad_to_length=None,
     pad_to_multiple=1,
 )
+sys.exit(8)
 print("tgt tokens = ", sample["target"])
 # sys.exit(0)
 # # print(sample.keys())

@@ -93,7 +93,6 @@ def collate(
     multi_src_lengths = list()
     multi_src_tokens = list()
     if samples[0].get("multi_source", None) is not None:
-
         multi_src_ = merge(
             "multi_source",
             left_pad=left_pad_target,
