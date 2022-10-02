@@ -1365,12 +1365,12 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                 )
         # print("forward del ok ", len(prev_output_tokens.shape) == 3, "flat_index" in extra)
         if normalize:
-            if "flat_index" in extra:
-                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.toks.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
-                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.logits.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
-            elif multi_len:
-                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.toks.unsquashed.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
-                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.logits.unsquashed.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
+            # if "flat_index" in extra:
+            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.toks.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
+            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.logits.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
+            # elif multi_len:
+            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.toks.unsquashed.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
+            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.logits.unsquashed.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
             return F.log_softmax(decoder_out, -1), extra["attn"]
         return decoder_out, extra["attn"]
 
@@ -1413,14 +1413,14 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
             )
         decoder_out = F.linear(features_cat, self.embed_plh.weight)
         if normalize:
-            if "flat_index" in extra:
-                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.toks.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
-                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.logits.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
-                self.cpt_save += 1
-            elif multi_len:
-                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.toks.unsquashed.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
-                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.logits.unsquashed.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
-                self.cpt_save += 1
+            # if "flat_index" in extra:
+            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.toks.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
+            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.logits.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
+            #     self.cpt_save += 1
+            # elif multi_len:
+            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.toks.unsquashed.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
+            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.logits.unsquashed.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
+            #     self.cpt_save += 1
             return F.log_softmax(decoder_out, -1), extra["attn"]
         # print("forward plh ok ", len(prev_output_tokens.shape) == 3, "flat_index" in extra)
         return decoder_out, extra["attn"]
