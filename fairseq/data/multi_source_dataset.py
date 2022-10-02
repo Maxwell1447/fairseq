@@ -13,6 +13,10 @@ from fairseq.data import FairseqDataset, data_utils
 logger = logging.getLogger(__name__)
 
 
+# def index_sentence_for_embedding(multi_src_toks, bos_idx):
+#     return (multi_src_toks == bos_idx).cumsum(-1)
+
+
 def collate(
     samples,
     pad_idx,
@@ -29,6 +33,17 @@ def collate(
     def merge(
         key, left_pad, move_eos_to_beginning=False, pad_to_length=None, is_list=False
     ):
+        
+        # if key == "multi_source":
+        #     return data_utils.collate_tokens(
+        #         [torch.cat(s[key]) for s in samples],
+        #         pad_idx,
+        #         eos_idx,
+        #         left_pad,
+        #         move_eos_to_beginning,
+        #         pad_to_length=pad_to_length,
+        #         pad_to_multiple=pad_to_multiple,
+        #     )
         if is_list:
             return data_utils.collate_tokens_list(
                 [s[key] for s in samples],

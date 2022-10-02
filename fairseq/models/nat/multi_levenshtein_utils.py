@@ -5,38 +5,7 @@
 
 import torch
 from fairseq.utils import new_arange
-
-# import networkx as nx
-# import itertools
-# import sortednp as snp
-# import numpy as np
-# import random as rd
 from fairseq import libnat2
-
-# -------------- Helper Functions --------------------------------------------------- #
-
-
-# def load_libnat():
-#     try:
-#         from fairseq import libnat_cuda
-
-#         return libnat_cuda, True
-
-#     except ImportError as e:
-#         print(str(e) + "... fall back to CPU version")
-
-#         try:
-#             from fairseq import libnat
-
-#             return libnat, False
-
-#         except ImportError as e:
-#             import sys
-
-#             sys.stderr.write(
-#                 "ERROR: missing libnat_cuda. run `python setup.py build_ext --inplace`\n"
-#             )
-#             raise e
 
 
 def pi_del(
@@ -51,8 +20,62 @@ def pi_del(
     device="cpu",
 ):
     """Operations and states to edit a partially deleted version of y_star back to y_star."""
-    # shape = B x N x M
-    # y_tgt_star : B x M
+    # shape = B x N x M    ou B x L
+    # y_tgt_star : B x M   ou B x L
+    # if len(shape) == 2:
+    #     # shape = list(shape)
+    #     # shape[-1] = y_tgt_star.size(-1)
+    #     # shape = tuple(shape)
+
+    #     del_tgt = torch.ones(shape, dtype=torch.long, device=device)
+    #     plh_tgt = -torch.ones(
+    #         (shape[0], shape[1] - N), dtype=torch.long, device=device
+    #     )
+    #     cmb_tgt = -torch.ones(shape[0], shape[1], dtype=torch.long, device=device)
+
+    #     y_plh = torch.full(
+    #         (shape[0], shape[1]), pad_symbol, dtype=torch.long, device=device
+    #     )
+    #     y_cmb = torch.full(shape, pad_symbol, dtype=torch.long, device=device)
+    #     y_tok = torch.full_like(y_tgt_star, pad_symbol, dtype=torch.long, device=device)
+
+    #     # y_star_n = y_tgt_star.view(shape[0], 1, shape[-1]).expand(shape)
+    #     y_star_n = torch.cat([y_tgt_star]*3, -1)
+
+    #     # tok_mask = torch.zeros_like(y_star_n, dtype=bool, device=device)
+    #     if mode == "uniform":
+    #         raise NotImplementedError(f"{mode} not implemented")
+    #         ...
+    #     else:
+    #         # what we keep
+    #         mask = (
+    #             ((torch.rand(y_star_n.shape, device=device) > 0.2) & (y_star_n.ne(pad_symbol)))
+    #             | (y_star_n == bos_symbol)
+    #             | (y_star_n == eos_symbol)
+    #         )
+        
+    #     sorted_ = mask.long().sort(stable=True, descending=True, dim=-1)
+    #     sorted_mask = sorted_[0].bool()
+    #     y_plh[sorted_mask] = y_star_n[mask]
+    #     y_cmb[y_star_n.ne(pad_symbol)] = plh_symbol
+    #     y_cmb[mask] = y_star_n[mask]
+    #     y_tok[y_tgt_star.ne(pad_symbol)] = plh_symbol
+
+    #     tok_mask = mask.any(1) # if any seq_i kept
+    #     y_tok[tok_mask] = y_tgt_star[tok_mask]
+
+    #     idx = sorted_[1]
+
+    #     plh_tgt = idx[:, :, 1:] - idx[:, :, :-1] - 1
+    #     plh_tgt[~sorted_mask[:, :, 1:]] = 0
+    #     plh_tgt = plh_tgt.clamp(0, Kmax - 1)
+
+    #     cmb_tgt = mask.long()
+
+    #     plh_mask = y_plh.ne(pad_symbol)[:, :, 1:]
+    #     del_mask = torch.zeros(shape, dtype=bool, device=device)
+    #     cmb_mask = y_tgt_star.ne(pad_symbol).view(shape[0], 1, shape[-1]).expand_as(y_cmb)
+    # else:
     shape = list(shape)
     shape[-1] = y_tgt_star.size(-1)
     shape = tuple(shape)

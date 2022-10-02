@@ -47,8 +47,8 @@ def load_libnat(device=None):
                 raise e
 
 
-def _get_ins_targets(in_tokens, out_tokens, padding_idx, unk_idx):
-    libnat, use_cuda = load_libnat()
+def _get_ins_targets(in_tokens, out_tokens, padding_idx, unk_idx, device=None):
+    libnat, use_cuda = load_libnat(device)
 
     def _get_ins_targets_cuda(in_tokens, out_tokens, padding_idx, unk_idx):
         in_masks = in_tokens.ne(padding_idx)

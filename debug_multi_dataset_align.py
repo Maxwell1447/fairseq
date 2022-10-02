@@ -111,7 +111,6 @@ def regularize_shape_multi(ys):
     return Y
 
 
-
 def load_model():
     from fairseq import models
     import argparse
@@ -158,7 +157,7 @@ def load_model():
 
     # model = models.build_model(cfg.model, task)
     # print(len(models))
-    return models[0] #, criterion
+    return models[0]  # , criterion
 
 
 def compute_loss(
@@ -212,23 +211,27 @@ def compute_loss(
             else:
                 print("pred  ", logits.argmax(-1)[:20])
                 print("target", targets[:20])
-            losses = F.nll_loss(logits, targets.to(logits.device), reduction="none")
+            losses = F.nll_loss(logits, targets.to(
+                logits.device), reduction="none")
 
         else:  # soft-labels
-            losses = F.kl_div(logits, targets.to(logits.device), reduction="none")
+            losses = F.kl_div(logits, targets.to(
+                logits.device), reduction="none")
             while losses.dim() > 1:
                 losses = losses.sum(-1)
 
         nll_loss = mean_ds(losses)
         if label_smoothing > 0:
             loss = (
-                nll_loss * (1 - label_smoothing) - mean_ds(logits) * label_smoothing
+                nll_loss * (1 - label_smoothing) -
+                mean_ds(logits) * label_smoothing
             )
         else:
             loss = nll_loss
 
     loss = loss * factor
     return {"name": name, "loss": loss, "nll_loss": nll_loss, "factor": factor}
+
 
 def forward_loss(outputs):
     """Compute the loss for the given sample.
@@ -255,9 +258,11 @@ def forward_loss(outputs):
             nll_loss += [_losses.get("nll_loss", 0.0)]
 
     loss = sum(l["loss"] for l in losses)
-    nll_loss = sum(l for l in nll_loss) if len(nll_loss) > 0 else loss.new_tensor(0)
+    nll_loss = sum(l for l in nll_loss) if len(
+        nll_loss) > 0 else loss.new_tensor(0)
 
     return loss
+
 
 def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
 
@@ -273,18 +278,24 @@ def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
             res[key][mask] = res1[key]
             res[key][~mask] = res2[key]
         return res
-    
+
     if sample_ is None:
         sample = dict()
-        sample["multi_source"] = torch.tensor([[0, 7, 9, 6, 4, 2, 1], [0, 9, 7, 6, 4, 9, 2]], dtype=torch.int64).unsqueeze(0)
-        sample["target"] = torch.tensor([[0, 7, 4, 5, 6, 2, 1]], dtype=torch.int64)
-        sample["multi_source"] = torch.randint(5, 15, size=(2, 40), dtype=torch.int64).unsqueeze(0)
-        sample["target"] = torch.randint(5, 15, size=(1, 40), dtype=torch.int64)
+        sample["multi_source"] = torch.tensor(
+            [[0, 7, 9, 6, 4, 2, 1], [0, 9, 7, 6, 4, 9, 2]], dtype=torch.int64).unsqueeze(0)
+        sample["target"] = torch.tensor(
+            [[0, 7, 4, 5, 6, 2, 1]], dtype=torch.int64)
+        sample["multi_source"] = torch.randint(
+            5, 15, size=(2, 40), dtype=torch.int64).unsqueeze(0)
+        sample["target"] = torch.randint(
+            5, 15, size=(1, 40), dtype=torch.int64)
     else:
         sample = sample_
-        sample["multi_source"] = regularize_shape_multi(sample["multi_source"]).unsqueeze(0)
+        sample["multi_source"] = regularize_shape_multi(
+            sample["multi_source"]).unsqueeze(0)
         sample["target"] = sample["target"].unsqueeze(0)
-        sample["multi_source"], sample["target"] = regularize_shapes(sample["multi_source"], sample["target"])
+        sample["multi_source"], sample["target"] = regularize_shapes(
+            sample["multi_source"], sample["target"])
         # print(sample)
         # print(sample["multi_source"].shape)
         # print("(T)  >>>", tgt_dict.string(sample_extreme["target"]))
@@ -293,10 +304,10 @@ def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
     # print(sample["multi_source"].shape, sample["target"].shape)
     # print(sample["multi_source"].shape)
     # print(sample["target"].shape)
-    y_init_star, tgt_tokens = sample["multi_source"], sample["target"] 
+    y_init_star, tgt_tokens = sample["multi_source"], sample["target"]
 
     # print("y_init_star", y_init_star.tolist())
-    
+
     mask_star = get_mask_from_prob(y_init_star.size(0), 0.2 * 0)
     t1 = time.time()
     res_star = pi_star(
@@ -314,7 +325,8 @@ def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
     # print(mask_debug)
     # print("multi src", sample["multi_source"][mask_star].tolist())
     print("y_cmb    ", res_star["y_cmb"].tolist())
-    cov = (1 - (res_star["y_tok"] == tgt_dict.unk()).sum() / res_star["y_tok"].ne(tgt_dict.pad()).sum()).item()
+    cov = (1 - (res_star["y_tok"] == tgt_dict.unk()).sum() /
+           res_star["y_tok"].ne(tgt_dict.pad()).sum()).item()
 
     return (t2 - t1), cov
     print("execution time = ", t2 - t1)
@@ -341,7 +353,6 @@ def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
 
     plh_tgt = res["plh_tgt"]
     plh_mask = res["plh_mask"]
-    
 
     cmb_tgt = res["cmb_tgt"]
     cmb_mask = res["cmb_mask"]
@@ -363,12 +374,13 @@ def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
     # y_cmb[0, 1, 4] = 11
 
     # cmb_tgt = handle_all_plh_case(cmb_tgt, y_tok, 3)
-    msk_cmb_sel = ((y_tok == 3) & (~(y_cmb == 3).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == 3)
+    msk_cmb_sel = ((y_tok == 3) & (~(y_cmb == 3).all(1))).unsqueeze(
+        1).expand_as(cmb_tgt) & (y_cmb == 3)
     cmb_tgt[msk_cmb_sel] = 7
     print("y_cmb", y_cmb)
     print("cmb_tgt", cmb_tgt)
 
-    mask_mask = get_mask_from_prob(y_tok.size(0), 0.2)   
+    mask_mask = get_mask_from_prob(y_tok.size(0), 0.2)
 
     y_tok[~mask_mask], tok_tgt[~mask_mask], tok_mask[~mask_mask] = pi_mask(
         tok_tgt[~mask_mask],
@@ -379,15 +391,18 @@ def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
         device=tok_mask.device
     )
 
-    del_out = torch.rand(1, sample["multi_source"].size(1), sample["multi_source"].size(2), 2)
-    plh_out = torch.rand(1, sample["multi_source"].size(1), sample["multi_source"].size(2) - 1, 64)
-    cmb_out = torch.rand(1, sample["multi_source"].size(1), sample["multi_source"].size(2), 2)
+    del_out = torch.rand(1, sample["multi_source"].size(
+        1), sample["multi_source"].size(2), 2)
+    plh_out = torch.rand(1, sample["multi_source"].size(
+        1), sample["multi_source"].size(2) - 1, 64)
+    cmb_out = torch.rand(1, sample["multi_source"].size(
+        1), sample["multi_source"].size(2), 2)
     tok_out = torch.rand(1, sample["multi_source"].size(2), 35000)
 
     # print(plh_tgt.shape, plh_mask.shape, plh_out.shape)
 
     for_loss = {
-        "plh": {"out": plh_out, "tgt": plh_tgt, "mask": plh_mask, "ls": 0.01,},
+        "plh": {"out": plh_out, "tgt": plh_tgt, "mask": plh_mask, "ls": 0.01, },
         "tok": {
             "out": tok_out,
             "tgt": tok_tgt,
@@ -395,11 +410,12 @@ def test_artificial_align(sample_=None, k=1, max_valency=1, device='cpu'):
             "ls": 0.1,
             "nll_loss": True,
         },
-        "del": {"out": del_out, "tgt": del_tgt, "mask": del_mask,},
-        "cmb": {"out": cmb_out, "tgt": cmb_tgt, "mask": cmb_mask,},
+        "del": {"out": del_out, "tgt": del_tgt, "mask": del_mask, },
+        "cmb": {"out": cmb_out, "tgt": cmb_tgt, "mask": cmb_mask, },
     }
 
     # forward_loss(for_loss)
+
 
 lmd = load_lang_multi_dataset(
     # "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/wmt-14/3-NN-noised/data-bin",
@@ -419,7 +435,7 @@ lmd = load_lang_multi_dataset(
     1024,
     prepend_bos=True,
 )
-torch.manual_seed(1) 
+torch.manual_seed(1)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -534,12 +550,10 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # device = "cpu"
 
 
-
-
-# model = load_model()
-# model.max_valency = 2
-# model = model.to(device)
-# model.eps = 0.
+model = load_model()
+model.max_valency = 2
+model = model.to(device)
+model.eps = 0.
 # iterator_3000 = get_batch_iter(lmd)
 # data_iter = iterator_3000.next_epoch_itr(shuffle=False)
 # print(len(data_iter))
@@ -548,7 +562,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 #     if i == 13074:
 #         # continue
 
-    
+
 #         print(str(i))
 #         print(sample["id"])
 #         print(sample)
@@ -562,41 +576,42 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 #         tgt_tokens = sample["target"].to(device)
 #         multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
 #         outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, i, ids=sample["id"])
-    
-    # x = sample["net_input"]["src_tokens"]
-    # tgt_tokens = sample["target"]
-    # y_init_star = sample["net_input"]["multi_src_tokens"]
-    # # outputs = model(src_tokens, multi_src_tokens, tgt_tokens)
 
-    # y_init_star, tgt_tokens = regularize_shapes(
-    #     y_init_star, tgt_tokens
-    # )
+# x = sample["net_input"]["src_tokens"]
+# tgt_tokens = sample["target"]
+# y_init_star = sample["net_input"]["multi_src_tokens"]
+# # outputs = model(src_tokens, multi_src_tokens, tgt_tokens)
 
-    # # print("batch", i, "  with", x.size(0), "elements")
+# y_init_star, tgt_tokens = regularize_shapes(
+#     y_init_star, tgt_tokens
+# )
 
-    # if i >= 0:
-    #     # print(sample["id"].cpu().numpy())
+# # print("batch", i, "  with", x.size(0), "elements")
 
-    #     res = pi_star(
-    #         y_init_star,
-    #         tgt_tokens,
-    #         pad_symbol=tgt_dict.pad(),
-    #         plh_symbol=tgt_dict.unk(),
-    #         Kmax=50,
-    #         max_valency=10,
-    #         device=x.device,
-    #     )
-    #     # break
+# if i >= 0:
+#     # print(sample["id"].cpu().numpy())
+
+#     res = pi_star(
+#         y_init_star,
+#         tgt_tokens,
+#         pad_symbol=tgt_dict.pad(),
+#         plh_symbol=tgt_dict.unk(),
+#         Kmax=50,
+#         max_valency=10,
+#         device=x.device,
+#     )
+#     # break
 
 # model.full_mlevt = True
-sample = [lmd[1], lmd[2]] #, 154425 139552
+sample = [lmd[1], lmd[2]]  # , 154425 139552
+# sample = [lmd[i] for i in range(10)]
 # # sample = [lmd[154425]]
 # # sample = [lmd[139552]]
 # # sample = [lmd[0]]
-print("src: ", src_dict.string(sample[0]["source"], None))
-for n in range(3):
-    print("multi_src: ", tgt_dict.string(sample[0]["multi_source"][n], None))
-print("tgt: ", tgt_dict.string(sample[0]["target"], None))
+# print("src: ", src_dict.string(sample[0]["source"], None))
+# for n in range(3):
+#     print("multi_src: ", tgt_dict.string(sample[0]["multi_source"][n], None))
+# print("tgt: ", tgt_dict.string(sample[0]["target"], None))
 
 
 sample = collate(
@@ -609,8 +624,64 @@ sample = collate(
     pad_to_length=None,
     pad_to_multiple=1,
 )
-sys.exit(8)
-print("tgt tokens = ", sample["target"])
+# print("collate successful")
+# print(sample["net_input"]["multi_src_tokens"])
+# print("pad before",
+#       (sample["net_input"]["multi_src_tokens"] == tgt_dict.pad()).sum().item(),
+#       sample["net_input"]["multi_src_tokens"].numel()
+#       )
+
+
+squashed, seq_index, sort_index = model.decoder.multi_squash(
+    sample["net_input"]["multi_src_tokens"])
+
+# print("pad after",
+#       (squashed == tgt_dict.pad()).sum().item(),
+#       squashed.numel()
+#       )
+
+# positions_ = torch.randn(
+#     sample["net_input"]["multi_src_tokens"].size(0),
+#     sample["net_input"]["multi_src_tokens"].size(2),
+#     4,
+# )
+positions_ = torch.arange(
+    sample["net_input"]["multi_src_tokens"].size(2)
+)[None, :].expand(
+    sample["net_input"]["multi_src_tokens"].size(0),
+    sample["net_input"]["multi_src_tokens"].size(2)
+).reshape(
+    sample["net_input"]["multi_src_tokens"].size(0),
+    sample["net_input"]["multi_src_tokens"].size(2),
+    1
+)
+# print("positions\n", positions_[..., -1].cpu().numpy())
+# print("pre shape", positions_.shape)
+positions_ = positions_[:, None, :].expand(
+    (sample["net_input"]["multi_src_tokens"].size(0),
+     sample["net_input"]["multi_src_tokens"].size(1),
+     sample["net_input"]["multi_src_tokens"].size(2),
+     positions_.size(-1))
+)
+positions_ = positions_.reshape(
+    sample["net_input"]["multi_src_tokens"].size(0),
+    sample["net_input"]["multi_src_tokens"].size(1) *
+    sample["net_input"]["multi_src_tokens"].size(2),
+    positions_.size(-1)
+)
+positions = positions_[
+    torch.arange(
+        squashed.size(0),
+        device=squashed.device
+    )[:, None].expand_as(sort_index), 
+    sort_index
+][:, :squashed.size(1)]
+# print("positions\n", positions[..., -1].cpu().numpy())
+# print("")
+
+# print(positions.shape)
+# print("squashed\n", squashed)
+# print("tgt tokens = ", sample["target"])
 # sys.exit(0)
 # # print(sample.keys())
 src_tokens, src_lengths = (
@@ -633,7 +704,10 @@ multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
 # print(res_post_del)
 
 with torch.no_grad():
-    outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, sample["num_iter"], ids=sample["id"])
+    outputs = model(src_tokens, src_lengths, multi_src_tokens,
+                    tgt_tokens, sample["num_iter"], ids=sample["id"])
+
+sys.exit(8)
 
 print("post_word_del_extra tgt", outputs["post_word_del_extra"]["tgt"])
 print("post_word_del_extra msk", outputs["post_word_del_extra"]["mask"])
@@ -948,4 +1022,3 @@ print("post_word_del_extra msk", outputs["post_word_del_extra"]["mask"])
 # #         tgt_dict.unk(),
 # #     )
 # )
-

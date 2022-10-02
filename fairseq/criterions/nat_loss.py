@@ -126,6 +126,11 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
 
         for obj in outputs:
             if outputs[obj].get("loss", None) is None:
+                # print()
+                # print("loss =", obj)
+                # print("mask :", outputs[obj].get("mask", None).shape)
+                # print("out :", outputs[obj].get("out").shape)
+                # print("tgt :", outputs[obj].get("tgt").shape)
                 _losses = self._compute_loss(
                     outputs[obj].get("out"),
                     outputs[obj].get("tgt"),
