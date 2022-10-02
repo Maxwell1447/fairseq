@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -153,6 +154,11 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             "--full-mlevt-align",
             action="store_true",
             help="Use the mlev alignment, even for the problematic sentences.",
+        )
+        parser.add_argument(
+            "--unsquash",
+            action="store_true",
+            help="Doesn't squash the multi tokens while passing into the transformer decoder.",
         )
 
     @classmethod
@@ -1034,7 +1040,8 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
         self.embed_seq_num = Embedding(
             self.num_retrieved + 1, embed_tokens.embedding_dim, None
         )
-        self.squash_multi_toks = True
+        self.squash_multi_toks = not getattr(args, "unsquash", False)
+        self.cpt_save = 0
 
         # del_word, ins_mask, ins_word
         self.early_exit = [int(i) for i in args.early_exit.split(",")]
@@ -1145,7 +1152,6 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
         # prev_output_tokens: batch x N x M
         if multi_len and len(prev_output_tokens.shape) > 1:
             shape_multi = prev_output_tokens.shape
-            
             if self.squash_multi_toks:
                 prev_output_squashed, embed_index, flat_index = self.multi_squash(prev_output_tokens)
                 extra.update(
@@ -1186,8 +1192,15 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
             if self.squash_multi_toks:
                 prev_output_tokens = prev_output_squashed
                 seq_emb = self.embed_seq_num(
-                    (prev_output_squashed == self.bos).cumsum(-1)
+                    (prev_output_squashed == self.bos).cumsum(-1) - 1
                 )
+                # # print("seq emb", seq_emb.shape)
+                # # print("index emb", (prev_output_squashed == self.bos).cumsum(-1).shape)
+                # inn = (prev_output_squashed == self.bos).cumsum(-1)[..., None] - 1
+                # # inn = seq_emb
+
+                # np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.seq.{self.cpt_save}.npy", self.multi_unsquash(inn, flat_index, shape_multi[1], shape_multi[2]).view(shape_multi[0], shape_multi[1], shape_multi[2], -1).cpu().numpy())
+                # # np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.embed-pos.{self.cpt_save}.npy", self.multi_unsquash(x, flat_index, shape_multi[1], shape_multi[2]).cpu().numpy())
             else:
                 seq_emb = self.embed_seq_num(
                     torch.arange(
@@ -1198,6 +1211,11 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                     prev_output_tokens.size(0), 1, 1)
                 seq_emb = seq_emb.unsqueeze(2).repeat(
                     1, 1, prev_output_tokens.size(2), 1)
+                # np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.seq.unsquashed.{self.cpt_save}.npy", torch.arange(
+                #         prev_output_tokens.size(1), device=prev_output_tokens.device
+                #     ).unsqueeze(-1).unsqueeze(0).repeat(
+                #     prev_output_tokens.size(0), 1, 1).unsqueeze(2).repeat(
+                #     1, 1, prev_output_tokens.size(2), 1).view(shape_multi[0], shape_multi[1], shape_multi[2], -1).cpu().numpy())
             
 
             tok_emb = self.embed_scale * self.embed_tokens(prev_output_tokens)
@@ -1252,8 +1270,19 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
 
         if positions is not None:
             x += positions
+
+
+
         if seq_emb is not None:
             x += seq_emb
+
+        # if self.squash_multi_toks:
+        #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.embed-seq.{self.cpt_save}.npy", self.multi_unsquash(x, flat_index, shape_multi[1], shape_multi[2]).cpu().numpy())
+        # else:
+        #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.embed-seq.unsquashed.{self.cpt_save}.npy", x.view(x.size(0), shape_multi[1], shape_multi[2], -1).cpu().numpy())
+        # sys.exit(0)
+
+
         x = self.dropout_module(x)
 
         # B x T x C -> T x B x C
@@ -1279,7 +1308,8 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                 else None,
                 self_attn_mask=None,
                 self_attn_padding_mask=decoder_padding_mask.view(
-                    decoder_padding_mask.size(0), -1
+                    decoder_padding_mask.size(0),
+                    -1
                 ),
             )
             # print(x.dtype, attn.dtype)
@@ -1311,6 +1341,7 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
 
     @ensemble_decoder
     def forward_del(self, normalize, encoder_out, prev_output_tokens, **unused):
+        multi_len = (len(prev_output_tokens.shape) == 3)
         features, extra = self.extract_features_multi(
             prev_output_tokens,
             encoder_out=encoder_out,
@@ -1334,6 +1365,12 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                 )
         # print("forward del ok ", len(prev_output_tokens.shape) == 3, "flat_index" in extra)
         if normalize:
+            if "flat_index" in extra:
+                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.toks.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
+                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.logits.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
+            elif multi_len:
+                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.toks.unsquashed.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
+                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.logits.unsquashed.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
             return F.log_softmax(decoder_out, -1), extra["attn"]
         return decoder_out, extra["attn"]
 
@@ -1376,6 +1413,14 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
             )
         decoder_out = F.linear(features_cat, self.embed_plh.weight)
         if normalize:
+            if "flat_index" in extra:
+                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.toks.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
+                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.logits.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
+                self.cpt_save += 1
+            elif multi_len:
+                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.toks.unsquashed.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
+                np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.logits.unsquashed.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
+                self.cpt_save += 1
             return F.log_softmax(decoder_out, -1), extra["attn"]
         # print("forward plh ok ", len(prev_output_tokens.shape) == 3, "flat_index" in extra)
         return decoder_out, extra["attn"]

@@ -30,6 +30,7 @@ class IterativeRefinementGenerator(object):
         adaptive=True,
         retain_history=False,
         reranking=False,
+        unsquash=False
     ):
         """
         Generates translations based on iterative refinement.
@@ -58,6 +59,7 @@ class IterativeRefinementGenerator(object):
         self.retain_history = retain_history
         self.adaptive = adaptive
         self.models = models
+        self.unsquash = unsquash
 
     def generate_batched_itr(
         self,
@@ -104,10 +106,13 @@ class IterativeRefinementGenerator(object):
                 "Constrained decoding with the IterativeRefinementGenerator is not supported"
             )
 
+
         # TODO: iterative refinement generator does not support ensemble for now.
         if not self.retain_dropout:
             for model in models:
                 model.eval()
+        for model in models:
+            model.decoder.squash_multi_toks = not self.unsquash
 
         model, reranker = models[0], None
         if self.reranking:

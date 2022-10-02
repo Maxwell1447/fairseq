@@ -478,6 +478,7 @@ class TranslationMultiLevenshteinTask(TranslationTask):
             max_ratio=getattr(args, "decode_max_ratio", None),
             max_iter=getattr(args, "iter_decode_max_iter", 10),
             retain_history=getattr(args, "retain_iter_history", False),
+            unsquash=getattr(args, "unsquash")
         )
 
     def build_dataset_for_inference(

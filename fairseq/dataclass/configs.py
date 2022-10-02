@@ -798,7 +798,10 @@ class GenerationConfig(FairseqDataclass):
     lm_weight: float = field(
         default=0.0, metadata={"help": "weight for lm probs for lm fusion"},
     )
-
+    unsquash: bool = field(
+        default=False,
+        metadata={"help": "Do not squash the multi toks before transformer forward."},
+    )
     # arguments for iterative refinement generator
     iter_decode_eos_penalty: float = field(
         default=0.0,
