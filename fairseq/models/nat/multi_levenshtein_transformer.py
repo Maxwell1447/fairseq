@@ -1186,7 +1186,7 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
             if self.squash_multi_toks:
                 prev_output_tokens = prev_output_squashed
                 seq_emb = self.embed_seq_num(
-                    (prev_output_squashed == self.bos).cumsum(-1)
+                    (prev_output_squashed == self.bos).cumsum(-1) - 1
                 )
             else:
                 seq_emb = self.embed_seq_num(
