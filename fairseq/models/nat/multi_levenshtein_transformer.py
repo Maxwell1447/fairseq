@@ -469,7 +469,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         post_plh_out, _ = self.decoder.forward_plh(
             normalize=False, prev_output_tokens=y_post_plh, encoder_out=encoder_out,
         )
-        if num_iter > self.curriculum_post_del_extra:
+        if True:
             # print("y_post_plh", y_post_plh.shape)
             with torch.no_grad():
                 # apply post_plh_out to y_post_plh
@@ -600,18 +600,18 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             "tgt": post_plh_tgt,
             "mask": post_plh_mask,
         }
-        if num_iter > self.curriculum_post_del_extra:
-            output["post_word_del_extra"] = {
-                "out": post_del_extra_out,
-                "tgt": post_del_extra_tgt,
-                "mask": post_del_extra_mask,
-            }
-        else:
+        if False:
             output["post_word_del_extra"] = {
                 "out": post_plh_out.new(1, 1, 2).fill_(0),
                 "tgt": post_plh_tgt.new(1, 1).fill_(0),
                 "mask": post_plh_mask.new(1, 1).fill_(1),
                 "factor": 1.0,
+            }            
+        else:            
+            output["post_word_del_extra"] = {
+                "out": post_del_extra_out,
+                "tgt": post_del_extra_tgt,
+                "mask": post_del_extra_mask,
             }
 
         return output

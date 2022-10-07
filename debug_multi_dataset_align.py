@@ -554,28 +554,47 @@ model = load_model()
 model.max_valency = 2
 model = model.to(device)
 model.eps = 0.
-# iterator_3000 = get_batch_iter(lmd)
-# data_iter = iterator_3000.next_epoch_itr(shuffle=False)
+iterator_3000 = get_batch_iter(lmd)
+data_iter = iterator_3000.next_epoch_itr(shuffle=True)
 # print(len(data_iter))
-# for i, sample in tqdm(enumerate(data_iter)):
+print()
+num_toks_squash = 0
+num_toks_unsquash = 0
+num_toks_src = 0
+num_toks_tgt = 0
+for i, sample in enumerate(data_iter):
+    # print("-"*25, i, "-"*25)
+    # B x L
+    src_tokens, src_lengths = (
+        sample["net_input"]["src_tokens"].to(device),
+        sample["net_input"]["src_lengths"].to(device),
+    )
+    sample["num_iter"] = i
+    tgt_tokens = sample["target"].to(device)
+    multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
+    # outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, i, ids=sample["id"])
+    squashed, seq_index, sort_index = model.decoder.multi_squash(
+        sample["net_input"]["multi_src_tokens"]
+    )
+    # print("src nopad % = ", src_tokens.ne(src_dict.pad()).sum().item() / src_tokens.numel() * 100, src_tokens.numel())
+    # print("tgt nopad % = ", tgt_tokens.ne(tgt_dict.pad()).sum().item() / tgt_tokens.numel() * 100, tgt_tokens.numel())
+    # print("multi unsquashed nopad % = ", multi_src_tokens.ne(tgt_dict.pad()).sum().item() / multi_src_tokens.numel() * 100, multi_src_tokens.numel())
+    # print("multi squashed nopad % = ", squashed.ne(tgt_dict.pad()).sum().item() / squashed.numel() * 100, squashed.numel())
+    num_toks_squash += squashed.numel()
+    num_toks_unsquash += multi_src_tokens.numel()
+    num_toks_src += src_tokens.numel()
+    num_toks_tgt += tgt_tokens.numel()
+    # print()
+    if i == 20:
+        break
 
-#     if i == 13074:
-#         # continue
+print()
+print("mean squash", num_toks_squash / i)
+print("mean unsquash", num_toks_unsquash / i)
+print("mean src", num_toks_src / i)
+print("mean tgt", num_toks_tgt / i)
 
-
-#         print(str(i))
-#         print(sample["id"])
-#         print(sample)
-
-#         # B x L
-#         src_tokens, src_lengths = (
-#             sample["net_input"]["src_tokens"].to(device),
-#             sample["net_input"]["src_lengths"].to(device),
-#         )
-#         sample["num_iter"] = i
-#         tgt_tokens = sample["target"].to(device)
-#         multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
-#         outputs = model(src_tokens, src_lengths, multi_src_tokens, tgt_tokens, i, ids=sample["id"])
+sys.exit(9)
 
 # x = sample["net_input"]["src_tokens"]
 # tgt_tokens = sample["target"]
@@ -603,7 +622,7 @@ model.eps = 0.
 #     # break
 
 # model.full_mlevt = True
-sample = [lmd[1], lmd[2]]  # , 154425 139552
+# sample = [lmd[1], lmd[2]]  # , 154425 139552
 # sample = [lmd[i] for i in range(10)]
 # # sample = [lmd[154425]]
 # # sample = [lmd[139552]]
@@ -614,16 +633,16 @@ sample = [lmd[1], lmd[2]]  # , 154425 139552
 # print("tgt: ", tgt_dict.string(sample[0]["target"], None))
 
 
-sample = collate(
-    sample,
-    tgt_dict.pad(),
-    tgt_dict.eos(),
-    left_pad_source=True,
-    left_pad_target=False,
-    input_feeding=True,
-    pad_to_length=None,
-    pad_to_multiple=1,
-)
+# sample = collate(
+#     sample,
+#     tgt_dict.pad(),
+#     tgt_dict.eos(),
+#     left_pad_source=True,
+#     left_pad_target=False,
+#     input_feeding=True,
+#     pad_to_length=None,
+#     pad_to_multiple=1,
+# )
 # print("collate successful")
 # print(sample["net_input"]["multi_src_tokens"])
 # print("pad before",
@@ -632,8 +651,8 @@ sample = collate(
 #       )
 
 
-squashed, seq_index, sort_index = model.decoder.multi_squash(
-    sample["net_input"]["multi_src_tokens"])
+# squashed, seq_index, sort_index = model.decoder.multi_squash(
+#     sample["net_input"]["multi_src_tokens"])
 
 # print("pad after",
 #       (squashed == tgt_dict.pad()).sum().item(),
@@ -645,37 +664,37 @@ squashed, seq_index, sort_index = model.decoder.multi_squash(
 #     sample["net_input"]["multi_src_tokens"].size(2),
 #     4,
 # )
-positions_ = torch.arange(
-    sample["net_input"]["multi_src_tokens"].size(2)
-)[None, :].expand(
-    sample["net_input"]["multi_src_tokens"].size(0),
-    sample["net_input"]["multi_src_tokens"].size(2)
-).reshape(
-    sample["net_input"]["multi_src_tokens"].size(0),
-    sample["net_input"]["multi_src_tokens"].size(2),
-    1
-)
+# positions_ = torch.arange(
+#     sample["net_input"]["multi_src_tokens"].size(2)
+# )[None, :].expand(
+#     sample["net_input"]["multi_src_tokens"].size(0),
+#     sample["net_input"]["multi_src_tokens"].size(2)
+# ).reshape(
+#     sample["net_input"]["multi_src_tokens"].size(0),
+#     sample["net_input"]["multi_src_tokens"].size(2),
+#     1
+# )
 # print("positions\n", positions_[..., -1].cpu().numpy())
 # print("pre shape", positions_.shape)
-positions_ = positions_[:, None, :].expand(
-    (sample["net_input"]["multi_src_tokens"].size(0),
-     sample["net_input"]["multi_src_tokens"].size(1),
-     sample["net_input"]["multi_src_tokens"].size(2),
-     positions_.size(-1))
-)
-positions_ = positions_.reshape(
-    sample["net_input"]["multi_src_tokens"].size(0),
-    sample["net_input"]["multi_src_tokens"].size(1) *
-    sample["net_input"]["multi_src_tokens"].size(2),
-    positions_.size(-1)
-)
-positions = positions_[
-    torch.arange(
-        squashed.size(0),
-        device=squashed.device
-    )[:, None].expand_as(sort_index), 
-    sort_index
-][:, :squashed.size(1)]
+# positions_ = positions_[:, None, :].expand(
+#     (sample["net_input"]["multi_src_tokens"].size(0),
+#      sample["net_input"]["multi_src_tokens"].size(1),
+#      sample["net_input"]["multi_src_tokens"].size(2),
+#      positions_.size(-1))
+# )
+# positions_ = positions_.reshape(
+#     sample["net_input"]["multi_src_tokens"].size(0),
+#     sample["net_input"]["multi_src_tokens"].size(1) *
+#     sample["net_input"]["multi_src_tokens"].size(2),
+#     positions_.size(-1)
+# )
+# positions = positions_[
+#     torch.arange(
+#         squashed.size(0),
+#         device=squashed.device
+#     )[:, None].expand_as(sort_index), 
+#     sort_index
+# ][:, :squashed.size(1)]
 # print("positions\n", positions[..., -1].cpu().numpy())
 # print("")
 
@@ -684,13 +703,13 @@ positions = positions_[
 # print("tgt tokens = ", sample["target"])
 # sys.exit(0)
 # # print(sample.keys())
-src_tokens, src_lengths = (
-    sample["net_input"]["src_tokens"].to(device),
-    sample["net_input"]["src_lengths"].to(device),
-)
-sample["num_iter"] = 2
-tgt_tokens = sample["target"].to(device)
-multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
+# src_tokens, src_lengths = (
+#     sample["net_input"]["src_tokens"].to(device),
+#     sample["net_input"]["src_lengths"].to(device),
+# )
+# sample["num_iter"] = 2
+# tgt_tokens = sample["target"].to(device)
+# multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
 # res_post_del = pi_del_single(
 #     # prev_output_tokens[mask_not_self_target].shape,
 #     tgt_tokens,
@@ -703,14 +722,14 @@ multi_src_tokens = sample["net_input"]["multi_src_tokens"].to(device)
 # )
 # print(res_post_del)
 
-with torch.no_grad():
-    outputs = model(src_tokens, src_lengths, multi_src_tokens,
-                    tgt_tokens, sample["num_iter"], ids=sample["id"])
+# with torch.no_grad():
+#     outputs = model(src_tokens, src_lengths, multi_src_tokens,
+#                     tgt_tokens, sample["num_iter"], ids=sample["id"])
 
-sys.exit(8)
+# sys.exit(8)
 
-print("post_word_del_extra tgt", outputs["post_word_del_extra"]["tgt"])
-print("post_word_del_extra msk", outputs["post_word_del_extra"]["mask"])
+# print("post_word_del_extra tgt", outputs["post_word_del_extra"]["tgt"])
+# print("post_word_del_extra msk", outputs["post_word_del_extra"]["mask"])
 
 
 # # multi_src_tokens, tgt_tokens = regularize_shapes(

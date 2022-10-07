@@ -498,6 +498,13 @@ class LanguageMultiSourceDataset(FairseqDataset):
     def num_tokens(self, index):
         """Return the number of tokens in a sample. This value is used to
         enforce ``--max-tokens`` during batching."""
+        # return max(
+        #     self.src_sizes[index],
+        #     self.tgt_sizes[index] if self.tgt_sizes is not None else 0,
+        #     sum([single_size[index] for single_size in self.multi_src_sizes])
+        #     if self.multi_src_sizes is not None
+        #     else 0,
+        # )
         return max(
             self.src_sizes[index],
             self.tgt_sizes[index] if self.tgt_sizes is not None else 0,
@@ -514,21 +521,29 @@ class LanguageMultiSourceDataset(FairseqDataset):
             sizes = np.maximum(sizes, self.tgt_sizes[indices])
             # sizes = sizes + self.tgt_sizes[indices]
         if self.multi_src_sizes is not None:
-            multi_size = np.zeros_like(sizes)
-            for single_size in self.multi_src_sizes:
-                multi_size = multi_size + single_size[indices]
-            sizes = np.maximum(sizes, multi_size)
+            # multi_size = np.zeros_like(sizes)
+            # for single_size in self.multi_src_sizes:
+            #     multi_size = multi_size + single_size[indices]
+            multi_sizes = sum(self.multi_src_sizes)[indices]
+            sizes = np.maximum(sizes, multi_sizes)
             # sizes = sizes + multi_size
         return sizes
 
     def size(self, index):
         """Return an example's size as a float or tuple. This value is used when
         filtering a dataset with ``--max-positions``."""
+        # return (
+        #     self.src_sizes[index],
+        #     [single_size[index] for single_size in self.multi_src_sizes]
+        #     if self.tgt_sizes is not None
+        #     else [],
+        #     self.tgt_sizes[index] if self.tgt_sizes is not None else 0,
+        # )
         return (
             self.src_sizes[index],
-            [single_size[index] for single_size in self.multi_src_sizes]
-            if self.tgt_sizes is not None
-            else [],
+            sum([single_size[index] for single_size in self.multi_src_sizes])
+            if self.multi_src_sizes is not None
+            else 0,
             self.tgt_sizes[index] if self.tgt_sizes is not None else 0,
         )
 
@@ -541,11 +556,14 @@ class LanguageMultiSourceDataset(FairseqDataset):
             indices = np.arange(len(self), dtype=np.int64)
         if self.buckets is None:
             # sort by multi_source length, then target length, then source length
-            for single_size in self.multi_src_sizes:
-                indices = indices[np.argsort(single_size[indices], kind="mergesort")]
+            # for single_size in self.multi_src_sizes:
+            #     indices = indices[np.argsort(single_size[indices], kind="mergesort")]
+            
             if self.tgt_sizes is not None:
                 indices = indices[np.argsort(self.tgt_sizes[indices], kind="mergesort")]
-            return indices[np.argsort(self.src_sizes[indices], kind="mergesort")]
+            indices = indices[np.argsort(self.src_sizes[indices], kind="mergesort")]
+            indices = indices[np.argsort(sum(single_size[indices] for single_size in self.multi_src_sizes), kind="mergesort")]
+            return indices
         else:
             # sort by bucketed_num_tokens, which is:
             #   max(padded_src_len, padded_tgt_len)
