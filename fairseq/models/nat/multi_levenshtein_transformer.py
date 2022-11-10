@@ -163,16 +163,29 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             decoder.apply(init_bert_params)
         return decoder
 
-    def regularize_shapes(self, ys, y):
+    # def regularize_shapes(self, ys, y):
+    #     bsz = y.size(0)
+    #     M = max(ys.size(-1), y.size(-1))
+    #     N = ys.size(1)
+    #     shape = (bsz, N + 1, M)
+    #     X = y.new(*shape).fill_(self.pad)
+    #     X[:, -1, : y.size(-1)] = y
+    #     X[:, :-1, : ys.size(-1)] = ys
+
+    #     return X[:, :-1, :], X[:, -1, :]
+
+    def regularize_shapes(ys, y):
         bsz = y.size(0)
         M = max(ys.size(-1), y.size(-1))
         N = ys.size(1)
-        shape = (bsz, N + 1, M)
-        X = y.new(*shape).fill_(self.pad)
-        X[:, -1, : y.size(-1)] = y
-        X[:, :-1, : ys.size(-1)] = ys
+        shape_n = (bsz, N, M)
+        shape = (bsz, M)
+        Xs = ys.new(*shape_n).fill_(tgt_dict.pad())
+        X = y.new(*shape).fill_(tgt_dict.pad())
+        Xs[:, :, :ys.size(-1)] = ys
+        X[:, :y.size(-1)] = y
 
-        return X[:, :-1, :], X[:, -1, :]
+        return Xs, X
 
     @staticmethod
     def get_mask_from_prob(bsz, p):
@@ -1185,6 +1198,8 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
 
             if self.squash_multi_toks:
                 prev_output_tokens = prev_output_squashed
+                # print(prev_output_tokens.cpu().numpy())
+                # print(((prev_output_squashed == self.bos).cumsum(-1) - 1).cpu().numpy())
                 seq_emb = self.embed_seq_num(
                     (prev_output_squashed == self.bos).cumsum(-1) - 1
                 )

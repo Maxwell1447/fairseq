@@ -727,6 +727,7 @@ public:
     long seq_len = max(s_i_len, s_ref_len);
 
     auto options = torch::TensorOptions()
+                       .layout(s_i.layout())
                        .dtype(torch::kI64);
 
     // initialize ops

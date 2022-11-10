@@ -120,13 +120,13 @@ try:
     #         )
     #     ]
     # )
-    # extensions.extend(
-    #     [
-    #         cpp_extension.CppExtension(
-    #             "fairseq.libnat2", sources=["fairseq/clib/libnat2/edit_dist.cpp",],
-    #         )
-    #     ]
-    # )
+    extensions.extend(
+        [
+            cpp_extension.CppExtension(
+                "fairseq.libnat2", sources=["fairseq/clib/libnat2/edit_dist.cpp",],
+            )
+        ]
+    )
     print("...................", os.environ)
     if "CUDA_HOME" in os.environ:
         # print("true")
@@ -146,13 +146,13 @@ try:
                 #         "fairseq/clib/cuda/ngram_repeat_block_cuda_kernel.cu",
                 #     ],
                 # ),
-                cpp_extension.CppExtension(
-                    "fairseq.libdual_cuda",
-                    sources=[
-                        "fairseq/clib/libdual_cuda/dual.cu",
-                        "fairseq/clib/libdual_cuda/binding.cpp",
-                    ],
-                ),
+                # cpp_extension.CppExtension(
+                #     "fairseq.libdual_cuda",
+                #     sources=[
+                #         "fairseq/clib/libdual_cuda/dual.cu",
+                #         "fairseq/clib/libdual_cuda/binding.cpp",
+                #     ],
+                # ),
             ]
         )
     cmdclass["build_ext"] = cpp_extension.BuildExtension

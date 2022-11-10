@@ -310,7 +310,9 @@ def pi_star(
 
 
 def handle_all_plh_case(cmb_tgt, y_tok, y_cmb, plh_symbol):
-    msk_cmb_sel = ((y_tok == plh_symbol) & ((y_cmb == plh_symbol).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == plh_symbol)
+    # if position with only plh, consider them as acceptable, but only if plh
+    # msk_cmb_sel = ((y_tok == plh_symbol) & ((y_cmb == plh_symbol).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == plh_symbol)
+    msk_cmb_sel = ((y_tok == plh_symbol) & (~cmb_tgt.any(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == plh_symbol)
     cmb_tgt[msk_cmb_sel] = 1
     return cmb_tgt
 
