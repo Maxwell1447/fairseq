@@ -336,6 +336,42 @@ def write_formatted_ops_and_stages(
             f.write("</table>\n")
 
 
+def get_precision_score(hyp, tgt_tokens, origin, pad=1, eos=2, bos=0):
+    origin = origin[:hyp.size(0)]
+    # print("origin:\n", origin.shape, "\n", origin, file=sys.stderr)
+    # print("hyp:\n", hyp.shape, "\n", hyp, file=sys.stderr, flush=True)
+    prev_origin_msk = (origin > 0) & hyp.ne(pad) & hyp.ne(bos) & hyp.ne(eos)
+    pred_origin_msk = (origin == 0) & hyp.ne(pad) & hyp.ne(bos) & hyp.ne(eos)
+    prev_vals, prev_cpt = hyp[prev_origin_msk].unique(return_counts=True)
+    pred_vals, pred_cpt = hyp[pred_origin_msk].unique(return_counts=True)
+    tgt_vals, tgt_cpt = tgt_tokens.unique(return_counts=True)
+
+    # print("prev_origin_msk", prev_origin_msk)
+    # print("pred_origin_msk", pred_origin_msk)
+
+    prev_dict = dict(zip(prev_vals.tolist(), prev_cpt.tolist()))
+    pred_dict = dict(zip(pred_vals.tolist(), pred_cpt.tolist()))
+    tgt_dict = dict(zip(tgt_vals.tolist(), tgt_cpt.tolist()))
+
+    # print("prev_dict", prev_dict)
+    # print("pred_dict", pred_dict)
+    # print("tgt_dict", tgt_dict)
+
+    prev_precision = 0.
+    for tok in prev_dict:
+        if tok in tgt_dict:
+            prev_precision += min(prev_dict[tok], tgt_dict[tok])
+    prev_precision /= prev_origin_msk.sum()
+
+    pred_precision = 0.
+    for tok in pred_dict:
+        if tok in tgt_dict:
+            pred_precision += min(pred_dict[tok], tgt_dict[tok])
+    pred_precision /= pred_origin_msk.sum()
+
+    return prev_precision, pred_precision, prev_origin_msk.sum(), pred_origin_msk.sum()
+
+
 def make_positions(tensor, padding_idx: int, onnx_trace: bool = False):
     """Replace non-padding symbols with their position numbers.
 

@@ -11,6 +11,7 @@ from fairseq.models import register_model, register_model_architecture
 from fairseq.models.nat import FairseqNATDecoder, FairseqNATModel, ensemble_decoder
 from fairseq.models.transformer import Embedding, TransformerDecoderLayer
 from fairseq.modules.transformer_sentence_encoder import init_bert_params
+import sys
 # from fairseq.data.multi_source_dataset import index_sentence_for_embedding
 import random as rd
 import numpy as np
@@ -37,6 +38,7 @@ from .multi_levenshtein_utils import (
     apply_plh,
     apply_cmb,
     apply_tok,
+    realign_dp_malign,
     _skip,
     _skip_encoder_out,
     _fill,
@@ -174,14 +176,14 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
 
     #     return X[:, :-1, :], X[:, -1, :]
 
-    def regularize_shapes(ys, y):
+    def regularize_shapes(self, ys, y):
         bsz = y.size(0)
         M = max(ys.size(-1), y.size(-1))
         N = ys.size(1)
         shape_n = (bsz, N, M)
         shape = (bsz, M)
-        Xs = ys.new(*shape_n).fill_(tgt_dict.pad())
-        X = y.new(*shape).fill_(tgt_dict.pad())
+        Xs = ys.new(*shape_n).fill_(self.pad)
+        X = y.new(*shape).fill_(self.pad)
         Xs[:, :, :ys.size(-1)] = ys
         X[:, :y.size(-1)] = y
 
@@ -308,7 +310,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                     ).unsqueeze(1))
                     del_mask_bad.append(prev_output_tokens[mask_star][~mask_good[mask_star]][:, n].ne(
                         self.pad).unsqueeze(1))
-                    y_plh_bad_, _, _ = _apply_del_words(
+                    y_plh_bad_, _, _, _ = _apply_del_words(
                         prev_output_tokens[mask_star][~mask_good[mask_star]][:, n],
                         in_scores=None,
                         in_attn=None,
@@ -349,7 +351,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 y_tok_bad = tgt_tokens[mask_star][~mask_good[mask_star]].clone(
                 )
                 y_tok_bad[(cmb_tgt_bad == self.unk).all(1)] = self.unk
-                tok_mask_bad = y_tok_bad.ne(self.unk)
+                # tok_mask_bad = y_tok_bad.ne(self.unk) AWFUL MISTAKE!!!!
+                tok_mask_bad = y_tok_bad == self.unk
                 cmb_tgt_bad = cmb_tgt_bad.long()
 
                 res_star = self.combine_res(
@@ -507,7 +510,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 #     post_plh_pred, max_lens
                 # )
                 # print("y_post_plh", y_post_plh)
-                y_post_tok, _ = _apply_ins_masks(
+                y_post_tok, _, _ = _apply_ins_masks(
                     y_post_plh.clone(),
                     None,
                     post_plh_pred,
@@ -644,11 +647,12 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 output_tokens.shape))
 
     def forward_decoder_multi(
-        self, decoder_out, encoder_out, eos_penalty=0.0, max_ratio=None, **kwargs
+        self, decoder_out, encoder_out, eos_penalty=0.0, max_ratio=None, realigner="no", **kwargs
     ):
 
         output_tokens = decoder_out.output_tokens  # B x N x M
         output_scores = decoder_out.output_scores
+        output_origin = decoder_out.output_origin
         attn = decoder_out.attn.unsqueeze(-1).expand(
             decoder_out.attn.size(0),
             decoder_out.attn.size(1),
@@ -680,7 +684,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             # apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx, eos_idx):
             # print("output_tokens[can_del_word]", output_tokens[can_del_word].shape)
             # print("del pred from out", del_pred.shape)
-            _tokens, _scores, _attn = apply_del(
+            _tokens, _scores, _attn, _origin = apply_del(
                 output_tokens[can_del_word],
                 output_scores[can_del_word],
                 del_attn,
@@ -688,6 +692,9 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 self.pad,
                 self.bos,
                 self.eos,
+                in_origin=output_origin[can_del_word]
+                if output_origin is not None
+                else None
             )
             # print(output_tokens.shape, can_del_word.shape, _tokens.shape)
             output_tokens = _fill(
@@ -697,6 +704,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             output_scores = _fill(output_scores, can_del_word, _scores, 0)
             # print(attn.shape, can_del_word.shape, can_del_word.sum(), _attn.shape)
             # print("after del >>>", output_tokens.shape, output_scores.shape)
+            output_origin = _fill(output_origin, can_del_word, _origin, 0)
             # print(attn.dtype, _attn.dtype)
             attn = _fill(attn, can_del_word, _attn, 0.0)
             # print("attttttttttn", attn.shape)
@@ -719,25 +727,41 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             if eos_penalty > 0.0:
                 plh_out[:, :, :, 0] = plh_out[:, :, :, 0] - eos_penalty
             # plh_out = F.softmax(plh_out, -1)
-            plh_pred = plh_out.max(-1)[1]
+            if realigner == "dp_malign":
+                plh_pred_success, success_mask = realign_dp_malign(_skip(output_tokens, can_plh), plh_out, eos=self.eos)
+            elif realigner == "grad_descent":
+                ...
+            else:
+                success_mask = torch.zeros(can_plh.sum(), device=plh_out.device, dtype=bool)
+
+            plh_pred = torch.zeros_like(plh_out[..., 0], dtype=torch.long)
+            plh_pred[~success_mask] = plh_out[~success_mask].max(-1)[1]
+            if success_mask.any():
+                # print(success_mask.sum(), plh_pred.shape, plh_pred_successs.shape, can_plh.sum(), file=sys.stderr, flush=True)
+                plh_pred[success_mask] = plh_pred_success[success_mask]
+
             plh_pred = torch.minimum(
                 plh_pred,
                 torch.tensor(255, device=plh_pred.device,
-                             dtype=plh_pred.dtype),
+                            dtype=plh_pred.dtype),
             )
 
-            _tokens, _scores = apply_plh(
+            _tokens, _scores, _origin = apply_plh(
                 output_tokens[can_plh],
                 output_scores[can_plh],
                 plh_pred,
                 self.pad,
                 self.unk,
                 self.eos,
+                in_origin=output_origin[can_plh]
+                if output_origin is not None
+                else None
             )
             output_tokens = _fill(output_tokens, can_plh, _tokens, self.pad)
             # print(output_scores.shape, can_plh.shape, _scores.shape)
             output_scores = _fill(output_scores, can_plh, _scores, 0)
             # print("after plh >>>", output_tokens.shape, output_scores.shape)
+            output_origin = _fill(output_origin, can_plh, _origin, 0)
 
             if history is not None:
                 history.append(output_tokens.clone())
@@ -782,7 +806,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         # plh_out = F.softmax(plh_out, -1)
         cmb_pred = cmb_out[:, :, :, 1]
 
-        output_tokens, output_scores = apply_cmb(
+        output_tokens, output_scores, output_origin = apply_cmb(
             output_tokens,
             output_scores,
             cmb_pred,
@@ -790,6 +814,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             self.bos,
             self.eos,
             self.unk,
+            in_origin=output_origin
         )
         # print("after cmb >>>", output_tokens.shape, output_scores.shape)
         attn = attn[:, 0]
@@ -811,17 +836,21 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             )
             tok_score, tok_pred = tok_out.max(-1)
 
-            _tokens, _scores = apply_tok(
+            _tokens, _scores, _origin = apply_tok(
                 output_tokens[can_tok],
                 output_scores[can_tok],
                 tok_pred,
                 tok_score,
                 self.unk,
+                in_origin=output_origin[can_tok]
+                if output_origin is not None
+                else None
             )
 
             output_tokens = _fill_single(
                 output_tokens, can_tok, _tokens, self.pad)
             output_scores = _fill_single(output_scores, can_tok, _scores, 0)
+            output_origin = _fill_single(output_origin, can_tok, _origin, 0)
             # print(attn.shape, can_tok.shape, tok_attn.shape, tok_out.shape, can_tok.sum())
             attn = _fill_single(attn, can_tok, tok_attn, 0.0)
 
@@ -837,10 +866,13 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         cut_off = output_tokens.ne(self.pad).sum(-1).max()
         output_tokens = output_tokens[:, :cut_off]
         output_scores = output_scores[:, :cut_off]
+        if output_origin is not None:
+            output_origin = output_origin[:, :cut_off]
 
         return decoder_out._replace(
             output_tokens=output_tokens,
             output_scores=output_scores,
+            output_origin=output_origin,
             attn=attn[:, :cut_off, :],
             history=history,
         )
@@ -855,6 +887,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         attn = decoder_out.attn
         history = decoder_out.history
         history_ops = decoder_out.history_ops
+        output_origin = decoder_out.output_origin
 
         max_lens = 255
 
@@ -873,7 +906,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             )
             del_pred = del_out.max(-1)[1].bool()
 
-            _tokens, _scores, _attn = _apply_del_words(
+            _tokens, _scores, _attn, _origin = _apply_del_words(
                 output_tokens[can_del_word],
                 output_scores[can_del_word],
                 del_attn,
@@ -881,11 +914,16 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 self.pad,
                 self.bos,
                 self.eos,
+                in_origin=output_origin[can_del_word]
+                if output_origin is not None
+                else None
             )
             output_tokens = _fill_single(
                 output_tokens, can_del_word, _tokens, self.pad)
             output_scores = _fill_single(
                 output_scores, can_del_word, _scores, 0)
+            output_origin = _fill_single(
+                output_origin, can_del_word, _origin, 0)
             attn = _fill_single(attn, can_del_word, _attn, 0.0)
 
             if history is not None:
@@ -913,18 +951,22 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                              dtype=plh_pred.dtype),
             )
 
-            _tokens, _scores = _apply_ins_masks(
+            _tokens, _scores, _origin = _apply_ins_masks(
                 output_tokens[can_plh],
                 output_scores[can_plh],
                 plh_pred,
                 self.pad,
                 self.unk,
                 self.eos,
+                in_origin=output_origin[can_plh]
+                if output_origin is not None
+                else None
             )
             # print("special ones", _tokens.shape, _scores.shape)
             output_tokens = _fill_single(
                 output_tokens, can_plh, _tokens, self.pad)
             output_scores = _fill_single(output_scores, can_plh, _scores, 0)
+            output_origin = _fill_single(output_origin, can_plh, _origin, 0)
 
             if history is not None:
                 history.append(output_tokens.clone())
@@ -943,16 +985,20 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                     self.encoder, encoder_out, can_tok),
             )
             tok_score, tok_pred = tok_out.max(-1)
-            _tokens, _scores = _apply_ins_words(
+            _tokens, _scores, _origin = _apply_ins_words(
                 output_tokens[can_tok],
                 output_scores[can_tok],
                 tok_pred,
                 tok_score,
                 self.unk,
+                in_origin=output_origin[can_tok]
+                if output_origin is not None
+                else None
             )
             output_tokens = _fill_single(
                 output_tokens, can_tok, _tokens, self.pad)
             output_scores = _fill_single(output_scores, can_tok, _scores, 0)
+            output_origin = _fill_single(output_origin, can_tok, _origin, 0)
             attn = _fill_single(attn, can_tok, tok_attn, 0.0)
 
             if history is not None:
@@ -966,12 +1012,15 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         cut_off = output_tokens.ne(self.pad).sum(-1).max()
         output_tokens = output_tokens[:, :cut_off]
         output_scores = output_scores[:, :cut_off]
+        if output_origin is not None:
+            output_origin = output_origin[:, :cut_off]
         # print("outoutoutoutout", output_tokens.shape, output_scores.shape)
         attn = None if attn is None else attn[:, :cut_off, :]
 
         return decoder_out._replace(
             output_tokens=output_tokens,
             output_scores=output_scores,
+            output_origin=output_origin,
             attn=attn,
             history=history,
         )
@@ -990,13 +1039,18 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         pred_scattered[can] = pred
         return pred_scattered
 
-    def initialize_output_tokens(self, encoder_out, multi_src_tokens):
+    def initialize_output_tokens(self, encoder_out, multi_src_tokens, retain_origin=False):
 
         return DecoderOut(
             output_tokens=multi_src_tokens,
             output_scores=torch.zeros_like(
                 multi_src_tokens
             ).type_as(encoder_out["encoder_out"][0]),
+            output_origin=torch.arange(
+                1, multi_src_tokens.size(1) + 1, device=multi_src_tokens.device
+            )[None, :, None].expand_as(multi_src_tokens)
+            if retain_origin
+            else None,
             attn=torch.zeros_like(
                 multi_src_tokens, dtype=torch.float32
             ),

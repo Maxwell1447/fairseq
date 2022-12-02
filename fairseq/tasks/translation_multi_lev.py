@@ -477,6 +477,7 @@ class TranslationMultiLevenshteinTask(TranslationTask):
             eos_penalty=getattr(args, "iter_decode_eos_penalty", 0.0),
             max_ratio=getattr(args, "decode_max_ratio", None),
             max_iter=getattr(args, "iter_decode_max_iter", 10),
+            retain_origin=getattr(args, "retain_origin", False),
             retain_history=getattr(args, "retain_iter_history", False),
         )
 

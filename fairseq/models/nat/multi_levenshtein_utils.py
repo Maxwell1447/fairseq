@@ -6,6 +6,10 @@
 import torch
 from fairseq.utils import new_arange
 from fairseq import libnat2
+from fairseq import realigner as realigner_module
+
+import time
+import sys
 
 
 def pi_del(
@@ -317,7 +321,7 @@ def handle_all_plh_case(cmb_tgt, y_tok, y_cmb, plh_symbol):
     return cmb_tgt
 
 
-def apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx, eos_idx):
+def apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx, eos_idx, in_origin=None):
     # word_del_pred: B x N x M in {False, True}
     # apply deletion to a tensor
     in_masks = in_tokens.ne(padding_idx)
@@ -336,6 +340,9 @@ def apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx
     out_scores = None
     if in_scores is not None:
         out_scores = in_scores.masked_fill(word_del_pred, 0).gather(2, reordering)
+    out_origin = None
+    if in_origin is not None:
+        out_origin = in_origin.masked_fill(word_del_pred, 0).gather(2, reordering)
 
     out_attn = None
     if in_attn is not None:
@@ -343,10 +350,10 @@ def apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx
         _reordering = reordering[:, :, :, None].expand_as(in_attn)
         out_attn = in_attn.masked_fill(_mask, 0.0).gather(2, _reordering)
 
-    return out_tokens, out_scores, out_attn
+    return out_tokens, out_scores, out_attn, out_origin
 
 
-def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx):
+def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx, in_origin=None):
     # plh_pred: B x N x M in {0, 1, ..., K_max - 1}
     # print("in tokens shape =", in_tokens.shape)
     # print("plh_pred shape  =", plh_pred.shape )
@@ -385,12 +392,18 @@ def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx):
         out_scores[:, :, 0] = in_scores[:, :, 0]
         out_scores.scatter_(2, reordering, in_scores[:, :, 1:])
 
+    out_origin = None
+    if in_origin is not None:
+        in_origin.masked_fill_(~in_masks, 0)
+        out_origin = in_origin.new_zeros(*out_tokens.size())
+        out_origin[:, :, 0] = in_scores[:, :, 0]
+        out_origin.scatter_(2, reordering, in_origin[:, :, 1:])
     # print("out toks", out_tokens[1].squeeze().cpu().numpy())
 
-    return out_tokens, out_scores
+    return out_tokens, out_scores, out_origin
 
 
-def apply_cmb(in_tokens, in_scores, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx):
+def apply_cmb(in_tokens, in_scores, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx, in_origin=None):
     # combine choice
     # cmb_pred: B x M x N in [0, 1] (float!)
     # in_tokens: B x N x M
@@ -430,11 +443,21 @@ def apply_cmb(in_tokens, in_scores, cmb_pred, padding_idx, bos_idx, eos_idx, unk
         )
         chosen_score = in_scores.transpose(1, 2)[idx1, idx2, cmb_pred]
         out_scores[out_masks] = chosen_score[out_masks]
+    out_origin = None
+    if in_origin is not None:
+        out_origin = torch.full(
+            (in_tokens.size(0), in_tokens.size(2)),
+            0.,
+            device=in_origin.device,
+            dtype=in_origin.dtype
+        )
+        chosen_origin = in_origin.transpose(1, 2)[idx1, idx2, cmb_pred]
+        out_origin[out_masks] = chosen_origin[out_masks]
 
-    return out_tokens, out_scores
+    return out_tokens, out_scores, out_origin
 
 
-def apply_tok(in_tokens, in_scores, tok_pred, tok_scores, unk_idx):
+def apply_tok(in_tokens, in_scores, tok_pred, tok_scores, unk_idx, in_origin=None):
     tok_masks = in_tokens.eq(unk_idx)
     out_tokens = in_tokens.masked_scatter(tok_masks, tok_pred[tok_masks])
 
@@ -444,8 +467,41 @@ def apply_tok(in_tokens, in_scores, tok_pred, tok_scores, unk_idx):
         )
     else:
         out_scores = None
+    if in_origin is not None:
+        # out_origin = in_origin.masked_scatter(
+        #     tok_masks, tok_scores[tok_masks]
+        # )
+        out_origin = in_origin
+    else:
+        out_origin = None
 
-    return out_tokens, out_scores
+    return out_tokens, out_scores, out_origin
+
+
+def realign_dp_malign(
+    tokens_to_realign,
+    logits,
+    p_cost=0.2,
+    r_cost=1.0,
+    alpha=0.5,
+    M=2,
+    use_alpha_max=False,
+    eos=2,
+):
+    t1 = time.time()
+    print("\n<<<", flush=True, file=sys.stderr)
+    realigner = realigner_module.RealignBatch(
+        tokens_to_realign.cpu(),
+        logits.cpu().float(),
+        p_cost,
+        r_cost,
+        alpha,
+        eos,
+        M,
+        use_alpha_max
+    )
+    print("\ntime =", time.time() - t1, flush=True, file=sys.stderr)
+    return realigner.get_realigned_plh_pred().to(tokens_to_realign.device), realigner.get_success_mask().bool().to(tokens_to_realign.device)
 
 
 def _skip(x, mask):

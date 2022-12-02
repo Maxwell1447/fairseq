@@ -366,6 +366,21 @@ def _main(cfg: DictConfig, output_file):
                             "I-{}\t{}".format(sample_id, hypo["steps"]),
                             file=output_file,
                         )
+                    if cfg.generation.retain_origin and cfg.generation.retain_iter_history:
+                        # print("multi = ", hypo["history"][0]["tokens"], file=sys.stderr)
+                        # print("hypo = ", hypo["history"][-1]["tokens"], file=sys.stderr)
+                        # print("origin = ", hypo["origin"], flush=True, file=sys.stderr)
+                        prev_prec, pred_prec, num_prev, num_prec = utils.get_precision_score(
+                            hypo["history"][-1]["tokens"],
+                            target_tokens,
+                            hypo["origin"]
+                        )
+                        print(
+                            "PREC-{}\t{}\t{}\t{}\t{}".format(
+                                sample_id, prev_prec, pred_prec, num_prev, num_prec
+                            ),
+                            file=output_file,
+                        )
 
                     if cfg.generation.retain_iter_history:
                         # print(len(hypo["history"]))
