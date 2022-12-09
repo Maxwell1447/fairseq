@@ -12,6 +12,7 @@ from fairseq.models.nat import FairseqNATDecoder, FairseqNATModel, ensemble_deco
 from fairseq.models.transformer import Embedding, TransformerDecoderLayer
 from fairseq.modules.transformer_sentence_encoder import init_bert_params
 import sys
+import time
 # from fairseq.data.multi_source_dataset import index_sentence_for_embedding
 import random as rd
 import numpy as np
@@ -39,6 +40,7 @@ from .multi_levenshtein_utils import (
     apply_cmb,
     apply_tok,
     realign_dp_malign,
+    realign_grad_descent,
     _skip,
     _skip_encoder_out,
     _fill,
@@ -726,11 +728,20 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             )
             if eos_penalty > 0.0:
                 plh_out[:, :, :, 0] = plh_out[:, :, :, 0] - eos_penalty
-            # plh_out = F.softmax(plh_out, -1)
-            if realigner == "dp_malign":
-                plh_pred_success, success_mask = realign_dp_malign(_skip(output_tokens, can_plh), plh_out, eos=self.eos)
-            elif realigner == "grad_descent":
-                ...
+            output_tokens_to_plh = _skip(output_tokens, can_plh)
+            mask_empty_sequences = output_tokens_to_plh[:, :, 1] == self.eos
+            # to_ignore_mask = mask_empty_sequences & (~mask_empty_sequences.all(-1))[:, None].expand_as(mask_empty_sequences)
+            # output_tokens_to_plh[to_ignore_mask][:, 1] = self.pad
+            if plh_out.size(1) > 1:
+                if realigner == "dp_malign":
+                    plh_pred_success, success_mask = realign_dp_malign(_skip(output_tokens, can_plh), plh_out, eos=self.eos)
+                elif realigner == "grad_descent":
+                    # tt = time.time()
+                    success_mask = torch.ones(can_plh.sum(), device=plh_out.device, dtype=bool)
+                    plh_pred_success = realign_grad_descent(output_tokens_to_plh, plh_out, eos=self.eos)
+                    # print("\n---- TIME ----", time.time() - tt, file=sys.stderr, flush=True)
+                else:
+                    success_mask = torch.zeros(can_plh.sum(), device=plh_out.device, dtype=bool)
             else:
                 success_mask = torch.zeros(can_plh.sum(), device=plh_out.device, dtype=bool)
 
@@ -753,6 +764,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 self.pad,
                 self.unk,
                 self.eos,
+                # to_ignore_mask=to_ignore_mask,
                 in_origin=output_origin[can_plh]
                 if output_origin is not None
                 else None

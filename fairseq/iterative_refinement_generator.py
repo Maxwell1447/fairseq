@@ -32,6 +32,7 @@ class IterativeRefinementGenerator(object):
         adaptive=True,
         retain_history=False,
         retain_origin=False,
+        realigner="no",
         reranking=False,
     ):
         """
@@ -60,6 +61,7 @@ class IterativeRefinementGenerator(object):
         self.retain_dropout = retain_dropout
         self.retain_history = retain_history
         self.retain_origin = retain_origin
+        self.realigner = realigner
         self.adaptive = adaptive
         self.models = models
 
@@ -247,7 +249,7 @@ class IterativeRefinementGenerator(object):
                 "max_ratio": self.max_ratio,
                 "decoding_format": self.decoding_format,
                 # "realigner": "dp_malign"
-                "realigner": "no"
+                "realigner": self.realigner
             }
             prev_decoder_out = prev_decoder_out._replace(
                 step=step,

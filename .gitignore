@@ -139,3 +139,9 @@ tgt_tokens.npy
 workspace.code-workspace
 fairseq/clib/libnat2/.edit_dist.cpp.swo
 fairseq/clib/libnat2/.edit_dist.cpp.swp
+
+# ignore debug and tests
+logs/
+*.pt
+debug_grad_descent_realigner*
+run_debug_grad_descent*

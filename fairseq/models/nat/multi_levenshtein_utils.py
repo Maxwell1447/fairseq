@@ -3,10 +3,12 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import math
 import torch
 from fairseq.utils import new_arange
 from fairseq import libnat2
 from fairseq import realigner as realigner_module
+from fairseq import dist_realign_cuda as dist_realign_cuda
 
 import time
 import sys
@@ -353,10 +355,10 @@ def apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx
     return out_tokens, out_scores, out_attn, out_origin
 
 
-def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx, in_origin=None):
+def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx, to_ignore_mask=None, in_origin=None):
     # plh_pred: B x N x M in {0, 1, ..., K_max - 1}
-    # print("in tokens shape =", in_tokens.shape)
-    # print("plh_pred shape  =", plh_pred.shape )
+    # print("in tokens shape =", in_tokens.shape, file=sys.stderr)
+    # print("plh_pred shape  =", plh_pred.shape, file=sys.stderr)
     in_masks = in_tokens.ne(padding_idx)
     in_lengths = in_masks.sum(2)
     # print("in toks", in_tokens[1].squeeze().cpu().numpy())
@@ -374,16 +376,29 @@ def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx, in_
     # print("out_masks", out_masks.squeeze().cpu().numpy())
 
     reordering = (plh_pred + in_masks[:, :, 1:].long()).cumsum(2)
-    # print("reordering", reordering.squeeze().cpu().numpy())
+    # print("reordering", reordering.max(), reordering.shape, flush=True, file=sys.stderr)
+    # print("out_lengths", out_lengths.max(), flush=True, file=sys.stderr)
     out_tokens = (
         in_tokens.new_zeros(in_tokens.size(0), in_tokens.size(1), out_lengths.max())
         .fill_(padding_idx)
         .masked_fill_(out_masks, unk_idx)
     )
+    # print("out_tokens", out_tokens.shape, flush=True, file=sys.stderr)
     out_tokens[:, :, 0] = in_tokens[:, :, 0]
     # print(out_tokens[:, :, 1:].shape, reordering.shape, in_tokens[:, :, 1:].shape)
     # print(reordering.max(), out_lengths.max())
+    # assert (reordering >= 0).all(), "negative index in reordering"
+    
+    # torch.save(reordering.cpu(), "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/reordering.pt")
+    # torch.save(in_tokens.cpu(), "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/in_tokens.pt")
+    # torch.save(out_tokens.cpu(), "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/out_tokens.pt")
+
     out_tokens[:, :, :].scatter_(2, reordering, in_tokens[:, :, 1:])
+
+    if to_ignore_mask is not None:
+        idx_n = to_ignore_mask.to(torch.int16).argsort(-1)[:, 0][:, None].expand(out_tokens.size(0), out_tokens.size(1))
+        idx_b = torch.arange(out_tokens.size(0), device=out_tokens.device)[:, None].expand_as(idx_n)
+        out_tokens[to_ignore_mask] = out_tokens[idx_b[to_ignore_mask], idx_n[to_ignore_mask]]
 
     out_scores = None
     if in_scores is not None:
@@ -503,6 +518,199 @@ def realign_dp_malign(
     print("\ntime =", time.time() - t1, flush=True, file=sys.stderr)
     return realigner.get_realigned_plh_pred().to(tokens_to_realign.device), realigner.get_success_mask().bool().to(tokens_to_realign.device)
 
+
+def build_alignment_graph(x, logits, pad, max_dist=2.5):
+    init_t = logits.argmax(-1)
+    b = init_t.size(0)
+    n = init_t.size(1)
+    l = init_t.size(2) + 1
+    init_pos = torch.zeros(b, n, l, dtype=init_t.dtype, device=init_t.device)
+    init_pos[..., 1:] = init_t + 1
+    init_pos = init_pos.cumsum(-1).float()
+
+    if max_dist is not None and max_dist < l:
+        dist_tensor = torch.cdist(
+            init_pos.view(b, -1)[..., None], init_pos.view(b, -1)[..., None], p=1.0
+        ).view(b, n, l, n, l)
+
+    graph = dist_realign_cuda.get_graph(x, pad).bool()
+    if max_dist is not None and max_dist < l:
+        graph = graph & (dist_tensor <= max_dist)
+
+    graph_mask = graph.view(b, n, l, -1).any(-1)
+    graph = graph.long()
+
+    return graph, graph_mask
+
+
+def compute_regression_normal(logits, logits_mask):
+    probs = torch.softmax(logits[logits_mask], dim=-1) ** 2
+    probs = probs / probs.sum(-1)[..., None]
+    # print("probs>>>>>>>>>>>>")
+    # print(probs[0])
+    # print(probs[-1])
+    arr = torch.arange(probs.size(-1), device=logits.device, dtype=logits.dtype)[
+        None, :
+    ]
+    mu = (probs * arr).sum(-1)
+    # print((mu**2)[-1], (probs * (arr**2)).sum(-1)[-1])
+    sigma2 = (probs * (arr**2)).sum(-1) - mu**2
+    mu = (mu + 5 * logits[logits_mask].argmax(-1)) / 6
+    return mu, sigma2.clamp(0.1, 2.0)
+
+
+def log_prob_loss_normal(t, mask_param, mu, sigma2):
+    return ((t[mask_param] - mu) ** 2 / (2 * sigma2)).sum()
+
+
+def length_loss(t, mask_param):
+    lengths = mask_param.sum(-1) + t.sum(-1)
+    mean_length = lengths.detach().mean(-1)[..., None].expand_as(lengths)
+    # return F.l1_loss(lengths, mean_length, reduction="sum")
+    # print(((lengths - mean_length) ** 2).detach().cpu().numpy())
+    y = torch.sigmoid((lengths - mean_length) * 4 * 2.0)
+    return (1 - 4 * (1 - y) * y).sum()
+    # return ((lengths - mean_length) ** 2).sum()
+
+
+def integer_loss(t, mask_param):
+    return (torch.sin(t[mask_param] * torch.pi) ** 2).sum()
+
+
+def lambda_t(it, kind="square", start=0, end=100, gamma=1.0):
+    if it < start:
+        return 0.0
+    if it > end:
+        return gamma
+    if kind == "square":
+        g = gamma / (end - start) ** 2
+        return g * (it - start) ** 2
+    else:
+        return 0.0
+
+
+def align_tok_loss(t, graph, graph_mask, per_batch=False, p=1):
+    b = t.size(0)
+    n = t.size(1)
+    l = t.size(2) + 1
+    pos = torch.zeros(b, n, l, dtype=t.dtype, device=t.device)
+    pos[..., 1:] = t + 1
+    pos = pos.cumsum(-1)
+
+    min_dist_align = dist_realign_cuda.scatter_dist_lp(graph, pos, graph_mask.long(), p)
+
+    min_dist_align[~graph_mask]
+    if per_batch:
+        min_dist_align[~graph_mask] = 0.0
+        min_dist_align = min_dist_align.view(min_dist_align.size(0), -1).sum(-1)
+        return min_dist_align / graph_mask.view(graph_mask.size(0), -1).sum(-1)
+
+    return min_dist_align[graph_mask].sum()
+
+"""
+optuna_best = {
+    'max_dist': 5,
+    'lr': 0.005,
+    'momentum': 0.97,
+    'scheduler_sqrt_rate': 0.5,
+    'num_iter': 100,
+    'alpha': 0.4,
+    'gamma': 0.8,
+    'start': 0.65,
+    'end': 0.8,
+    'len_loss_scale': 0.6
+}
+"""
+def realign_grad_descent(
+    x,
+    logits,
+    Kmax=64,
+    bos=0,
+    pad=1,
+    eos=2,
+    unk=3,
+    max_dist=5.0,
+    lr=0.005,
+    momentum=0.97,
+    scheduler_sqrt_rate=0.5,
+    num_iter=100,
+    alpha=0.4,
+    gamma=0.8,
+    start=0.65,
+    end=0.8,
+    len_loss_scale=0.6,
+    p=2,
+):
+    # torch.save(x.cpu(), "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/x.pt")
+    # torch.save(logits.cpu(), "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/logits.pt")
+    mask_param = x[..., 1:].ne(pad)
+
+    mu, sigma2 = compute_regression_normal(logits, mask_param)
+
+    # print(mu)
+
+    params_ = mu.clamp(0, Kmax)
+
+    # print(mu)
+    # print(sigma2)
+    with torch.enable_grad():
+        params_.requires_grad_()
+
+        graph, graph_mask = build_alignment_graph(x, logits, pad, max_dist=max_dist)
+
+        ##### OPTIMZER PARAMS
+        optimizer = torch.optim.SGD([params_], lr=lr, momentum=momentum)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, lr_lambda=(lambda x: 1.0 / math.sqrt(x * scheduler_sqrt_rate + 1.0))
+        )
+
+        for it in range(num_iter):
+            optimizer.zero_grad()
+            params = torch.zeros_like(x[..., :-1], dtype=logits.dtype)
+            params[mask_param] = params_
+            loss_prob = log_prob_loss_normal(params, mask_param, mu, sigma2)
+            loss_len = (
+                length_loss(params, mask_param)
+                if len_loss_scale > 0.0
+                else torch.tensor(0.0, device=x.device)
+            )
+            
+            loss_align = align_tok_loss(params, graph, graph_mask, p=p)
+            loss = alpha * loss_prob + (1 - alpha) * loss_align + loss_len * len_loss_scale
+            int_loss = integer_loss(params, mask_param)
+
+            # print("loss_align", loss_align.detach().item())
+            # print("loss_prob", loss_prob.detach().item())
+            # print("loss_len", loss_len.detach().item())
+            # print("loss", loss.detach().item())
+
+            loss_tot = (
+                loss
+                + lambda_t(
+                    it,
+                    start=start * num_iter,
+                    end=end * num_iter,
+                    gamma=gamma,
+                    kind="square",
+                )
+                * int_loss
+            )
+            # print(loss_tot.detach().item())
+
+            loss_tot.backward()
+            # print(params_._grad)
+            
+            optimizer.step()
+            scheduler.step()
+            # print(params_)
+            # break
+            params_.data = torch.clamp(params_, 0, Kmax)
+
+    params = torch.zeros_like(x[..., :-1], dtype=x.dtype)
+    params[mask_param] = params_.detach().round().to(x.dtype)
+    return params
+    
+    
 
 def _skip(x, mask):
     """

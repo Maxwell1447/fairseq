@@ -120,13 +120,20 @@ try:
     #         )
     #     ]
     # )
-    extensions.extend(
-        [
-            cpp_extension.CppExtension(
-                "fairseq.libnat2", sources=["fairseq/clib/libnat2/edit_dist.cpp",],
-            )
-        ]
-    )
+    # extensions.extend(
+    #     [
+    #         cpp_extension.CppExtension(
+    #             "fairseq.libnat2", sources=["fairseq/clib/libnat2/edit_dist.cpp",],
+    #         )
+    #     ]
+    # )
+    # extensions.extend(
+    #     [
+    #         cpp_extension.CppExtension(
+    #             "fairseq.realigner", sources=["fairseq/clib/realigner/src/malign.cpp",],
+    #         )
+    #     ]
+    # )
     print("...................", os.environ)
     if "CUDA_HOME" in os.environ:
         # print("true")
@@ -146,6 +153,13 @@ try:
                 #         "fairseq/clib/cuda/ngram_repeat_block_cuda_kernel.cu",
                 #     ],
                 # ),
+                cpp_extension.CppExtension(
+                    "fairseq.dist_realign_cuda",
+                    sources=[
+                        "fairseq/clib/dist_realign_cuda/align.cu",
+                        "fairseq/clib/dist_realign_cuda/binding.cpp",
+                    ],
+                ),
                 # cpp_extension.CppExtension(
                 #     "fairseq.libdual_cuda",
                 #     sources=[
