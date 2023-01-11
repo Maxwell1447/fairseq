@@ -284,6 +284,8 @@ def write_formatted_ops_and_stages(
                     if history_ops[iii]["ops"].dim() == 1:
                         op = history_ops[iii]["ops"][t + 1]
                     else:
+                        if t + 1 >= len(history_ops[iii]["ops"][c]):
+                            continue
                         op = history_ops[iii]["ops"][c][t + 1]
                     if op.item():
                         toks_list[c][t] = """<strike><span style="color:#AA0000">""" + toks_list[c][t] + "</strike></span>"            
@@ -295,6 +297,8 @@ def write_formatted_ops_and_stages(
                     if history_ops[iii]["ops"].dim() == 1:
                         op = history_ops[iii]["ops"][t]
                     else:
+                        if t >= len(history_ops[iii]["ops"][c]):
+                            continue
                         op = history_ops[iii]["ops"][c][t]
                     if op.item() > 0:
                         toks_list[c][t] = toks_list[c][t] + """<span style="color:#FF0000">+""" + str(op.item())  + "</span>"
@@ -346,6 +350,10 @@ def get_precision_score(hyp, tgt_tokens, origin, pad=1, eos=2, bos=0):
     pred_vals, pred_cpt = hyp[pred_origin_msk].unique(return_counts=True)
     tgt_vals, tgt_cpt = tgt_tokens.unique(return_counts=True)
 
+
+    # tgt_size = (tgt_tokens.ne(pad) & tgt_tokens.ne(bos) & tgt_tokens.ne(eos)).sum()
+    # assert tgt_size >= prev_origin_msk.sum() + pred_origin_msk.sum(), f"{tgt_size} > {prev_origin_msk.sum() + pred_origin_msk.sum()}"
+
     # print("prev_origin_msk", prev_origin_msk)
     # print("pred_origin_msk", pred_origin_msk)
 
@@ -370,6 +378,71 @@ def get_precision_score(hyp, tgt_tokens, origin, pad=1, eos=2, bos=0):
     pred_precision /= pred_origin_msk.sum()
 
     return prev_precision, pred_precision, prev_origin_msk.sum(), pred_origin_msk.sum()
+
+
+def get_bigram_precision_score(hyp, tgt_tokens, origin, pad=1, eos=2, bos=0):
+    origin = origin[:hyp.size(0)]
+    # print("origin:\n", origin.shape, "\n", origin, file=sys.stderr)
+    # print("hyp:\n", hyp.shape, "\n", hyp, file=sys.stderr, flush=True)
+    prev_origin_msk = (origin > 0) & hyp.ne(pad) & hyp.ne(bos) & hyp.ne(eos)
+    pred_origin_msk = (origin == 0) & hyp.ne(pad) & hyp.ne(bos) & hyp.ne(eos)
+
+    prev_prev_origin_msk = prev_origin_msk[:-1] & prev_origin_msk[1:]
+    prev_pred_origin_msk = prev_origin_msk[:-1] & pred_origin_msk[1:]
+    pred_prev_origin_msk = pred_origin_msk[:-1] & prev_origin_msk[1:]
+    pred_pred_origin_msk = pred_origin_msk[:-1] & pred_origin_msk[1:]
+
+    bigram_hyp = torch.vstack((hyp[:-1], hyp[1:])).t()
+    bigram_tgt = torch.vstack((tgt_tokens[:-1], tgt_tokens[1:])).t()
+
+    prev_prev_vals, prev_prev_cpt = bigram_hyp[prev_prev_origin_msk].unique(return_counts=True, dim=0)
+    prev_pred_vals, prev_pred_cpt = bigram_hyp[prev_pred_origin_msk].unique(return_counts=True, dim=0)
+    pred_prev_vals, pred_prev_cpt = bigram_hyp[pred_prev_origin_msk].unique(return_counts=True, dim=0)
+    pred_pred_vals, pred_pred_cpt = bigram_hyp[pred_pred_origin_msk].unique(return_counts=True, dim=0)
+    bigram_tgt_vals, bigram_tgt_cpt = bigram_tgt.unique(return_counts=True, dim=0)
+
+
+    # tgt_size = (tgt_tokens.ne(pad) & tgt_tokens.ne(bos) & tgt_tokens.ne(eos)).sum()
+    # assert tgt_size >= prev_origin_msk.sum() + pred_origin_msk.sum(), f"{tgt_size} > {prev_origin_msk.sum() + pred_origin_msk.sum()}"
+
+    # print("prev_origin_msk", prev_origin_msk)
+    # print("pred_origin_msk", pred_origin_msk)
+
+    prev_prev_dict = dict(zip([tuple(e) for e in prev_prev_vals.tolist()], prev_prev_cpt.tolist()))
+    prev_pred_dict = dict(zip([tuple(e) for e in prev_pred_vals.tolist()], prev_pred_cpt.tolist()))
+    pred_prev_dict = dict(zip([tuple(e) for e in pred_prev_vals.tolist()], pred_prev_cpt.tolist()))
+    pred_pred_dict = dict(zip([tuple(e) for e in pred_pred_vals.tolist()], pred_pred_cpt.tolist()))
+    bigram_tgt_dict = dict(zip([tuple(e) for e in bigram_tgt_vals.tolist()], bigram_tgt_cpt.tolist()))
+
+    # print("prev_dict", prev_dict)
+    # print("pred_dict", pred_dict)
+    # print("tgt_dict", tgt_dict)
+
+    prev_prev_precision = 0.
+    for tok in prev_prev_dict:
+        if tok in bigram_tgt_dict:
+            prev_prev_precision += min(prev_prev_dict[tok], bigram_tgt_dict[tok])
+    prev_prev_precision /= prev_prev_origin_msk.sum()
+
+    prev_pred_precision = 0.
+    for tok in prev_pred_dict:
+        if tok in bigram_tgt_dict:
+            prev_pred_precision += min(prev_pred_dict[tok], bigram_tgt_dict[tok])
+    prev_pred_precision /= prev_pred_origin_msk.sum()
+
+    pred_prev_precision = 0.
+    for tok in pred_prev_dict:
+        if tok in bigram_tgt_dict:
+            pred_prev_precision += min(pred_prev_dict[tok], bigram_tgt_dict[tok])
+    pred_prev_precision /= pred_prev_origin_msk.sum()
+
+    pred_pred_precision = 0.
+    for tok in pred_pred_dict:
+        if tok in bigram_tgt_dict:
+            pred_pred_precision += min(pred_pred_dict[tok], bigram_tgt_dict[tok])
+    pred_pred_precision /= pred_pred_origin_msk.sum()
+
+    return prev_prev_precision, prev_pred_precision, pred_prev_precision, pred_pred_precision, prev_prev_origin_msk.sum(), prev_pred_origin_msk.sum(), pred_prev_origin_msk.sum(), pred_pred_origin_msk.sum()
 
 
 def make_positions(tensor, padding_idx: int, onnx_trace: bool = False):

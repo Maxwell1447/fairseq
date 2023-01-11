@@ -393,7 +393,15 @@ def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx, to_
     # torch.save(in_tokens.cpu(), "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/in_tokens.pt")
     # torch.save(out_tokens.cpu(), "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/out_tokens.pt")
 
-    out_tokens[:, :, :].scatter_(2, reordering, in_tokens[:, :, 1:])
+    out_tokens.scatter_(2, reordering, in_tokens[:, :, 1:])
+    # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/fairseq/logs/cmb_debug.log", 'w') as logger_file:
+    #     print("\n\t before \n", out_tokens[72], file=logger_file)
+    #     out_tokens.scatter_(2, reordering[:, :, -1:], eos_idx)
+    #     print("\n\t after \n", out_tokens[72], file=logger_file)
+    #     print("\n\t reordering \n", reordering[72, :, -1:], file=logger_file)
+    # sys.exit(8)
+    out_tokens.scatter_(2, reordering[:, :, -1:], eos_idx)
+    # reordering[:, :, 0] # donne l'index problematique
 
     if to_ignore_mask is not None:
         idx_n = to_ignore_mask.to(torch.int16).argsort(-1)[:, 0][:, None].expand(out_tokens.size(0), out_tokens.size(1))
@@ -406,13 +414,19 @@ def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx, to_
         out_scores = in_scores.new_zeros(*out_tokens.size())
         out_scores[:, :, 0] = in_scores[:, :, 0]
         out_scores.scatter_(2, reordering, in_scores[:, :, 1:])
+        out_scores.scatter_(2, reordering[:, :, -1:], 0)
 
     out_origin = None
     if in_origin is not None:
+        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug_prec.txt", 'a') as f:
+        #     f.write("reordering " + str(reordering[164, 0]) + "\n")
+        #     f.write("in_origin " + str(in_origin[164, 0, 1:]) + "\n")
+        #     f.write("-" * 80 + "\n")
         in_origin.masked_fill_(~in_masks, 0)
         out_origin = in_origin.new_zeros(*out_tokens.size())
-        out_origin[:, :, 0] = in_scores[:, :, 0]
+        out_origin[:, :, 0] = in_origin[:, :, 0]
         out_origin.scatter_(2, reordering, in_origin[:, :, 1:])
+        out_origin.scatter_(2, reordering[:, :, -1:], 0)
     # print("out toks", out_tokens[1].squeeze().cpu().numpy())
 
     return out_tokens, out_scores, out_origin
@@ -422,9 +436,22 @@ def apply_cmb(in_tokens, in_scores, cmb_pred, padding_idx, bos_idx, eos_idx, unk
     # combine choice
     # cmb_pred: B x M x N in [0, 1] (float!)
     # in_tokens: B x N x M
+    # idx_to_display = 72
+    # idx_to_display = ((in_tokens.ne(eos_idx) & in_tokens.ne(bos_idx) & in_tokens.ne(unk_idx) & in_tokens.ne(padding_idx)).sum(-1) > 0).all(-1).argwhere()[idx_to_display]
+    # logger_file = open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/fairseq/logs/cmb_debug.log", 'a')
+    # print("\n\tidx\n", idx_to_display, file=logger_file)
+    # print("\n\tin_tokens\n", in_tokens[idx_to_display], file=logger_file)
+    # print("\n\tcmb_pred before\n", cmb_pred.max(-1)[1][idx_to_display], file=logger_file)
+    lengths = in_tokens.ne(padding_idx).sum(-1)
+    cmb_pred[
+        (in_tokens == eos_idx).transpose(1, 2) &
+        (lengths.ne(lengths.max(-1)[0][..., None]))[..., None, :]
+    ] = torch.finfo(cmb_pred.dtype).min
     cmb_pred = cmb_pred.max(-1)[1]
+    # print("\n\tcmb_pred after\n", cmb_pred[idx_to_display], file=logger_file)
     in_masks = in_tokens.ne(padding_idx)
     in_cmb_lengths = (in_masks.sum(1) > 0).sum(-1)  # B
+    # in_cmb_lengths = in_masks.any(1).sum(-1)  # B
 
     out_tokens = torch.full(
         (in_tokens.size(0), in_tokens.size(2)), padding_idx, device=in_tokens.device
@@ -447,6 +474,13 @@ def apply_cmb(in_tokens, in_scores, cmb_pred, padding_idx, bos_idx, eos_idx, unk
     chosen = in_tokens.transpose(1, 2)[idx1, idx2, cmb_pred]
 
     out_tokens[out_masks] = chosen[out_masks]
+    # print("\n\tout_tokens before\n", out_tokens[idx_to_display], file=logger_file)
+    # out_tokens.scatter_(-1, in_cmb_lengths[:, None] - 1, eos_idx)
+    # print("\n\tout_tokens after\n", out_tokens[idx_to_display], file=logger_file, flush=True)
+
+    # logger_file.close()
+
+    # sys.exit(8)
 
     out_scores = None
     if in_scores is not None:
@@ -559,6 +593,20 @@ def compute_regression_normal(logits, logits_mask):
     return mu, sigma2.clamp(0.1, 2.0)
 
 
+def log_prob_loss_multinomial_pdf(params, logits, sigma=1.0, tau=1.0):
+    # params: M
+    # logits: M x (Kmax + 1)
+    p = torch.exp(tau * (logits - logits.max(-1)[0][:, None]))
+    p /= p.sum(-1)[:, None]
+    ii = torch.arange(logits.size(-1) + 1, device=p.device, dtype=p.dtype)[None, :]
+
+    # numerically stable log-sum-exp
+    xs = - 0.5 * ((params[:, None] - ii) / sigma) ** 2  # M x (Kmax + 1)
+    max_stablizer = xs.max(-1)[0]
+    ys = torch.log(torch.exp(xs - max_stablizer[:, None]).sum(-1)) # M
+    
+    return ys.sum()
+
 def log_prob_loss_normal(t, mask_param, mu, sigma2):
     return ((t[mask_param] - mu) ** 2 / (2 * sigma2)).sum()
 
@@ -640,13 +688,18 @@ def realign_grad_descent(
     end=0.8,
     len_loss_scale=0.6,
     p=2,
+    log_prob_loss_type="normal_regression",
+    sigma=1.0,
+    tau=1.0
 ):
     # torch.save(x.cpu(), "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/x.pt")
     # torch.save(logits.cpu(), "/linkhome/rech/genrqo01/ufn16wp/NLP4NLP/fairseq/logits.pt")
     mask_param = x[..., 1:].ne(pad)
 
-    mu, sigma2 = compute_regression_normal(logits, mask_param)
-
+    if log_prob_loss_type == "normal_regression":
+        mu, sigma2 = compute_regression_normal(logits, mask_param)
+    elif log_prob_loss_type == "multinomial_pdf":
+        mu = logits[mask_param].argmax(-1).to(logits.dtype)
     # print(mu)
 
     params_ = mu.clamp(0, Kmax)
@@ -668,7 +721,10 @@ def realign_grad_descent(
             optimizer.zero_grad()
             params = torch.zeros_like(x[..., :-1], dtype=logits.dtype)
             params[mask_param] = params_
-            loss_prob = log_prob_loss_normal(params, mask_param, mu, sigma2)
+            if log_prob_loss_type == "normal_regression":
+                loss_prob = log_prob_loss_normal(params, mask_param, mu, sigma2)
+            elif log_prob_loss_type == "multinomial_pdf":
+                loss_prob = log_prob_loss_multinomial_pdf(params[mask_param], logits[mask_param], sigma=sigma, tau=tau)
             loss_len = (
                 length_loss(params, mask_param)
                 if len_loss_scale > 0.0

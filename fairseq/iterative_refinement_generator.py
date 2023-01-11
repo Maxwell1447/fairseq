@@ -132,6 +132,12 @@ class IterativeRefinementGenerator(object):
             model.enable_ensemble(models)
 
         # TODO: better encoder inputs?
+        # if 119 in sample["id"]:
+        # with open("/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/debug_get_id.log", 'w') as f:
+        #     where_id = (sample["id"] == 0).argwhere()
+        #     # f.write(str(sample["id"]))
+        #     f.write(str(where_id) + "\n")
+        #     sys.exit(8) # 64
         src_tokens = sample["net_input"]["src_tokens"]
         src_lengths = sample["net_input"]["src_lengths"]
         if "multi_src_tokens" in sample["net_input"]:
@@ -142,12 +148,12 @@ class IterativeRefinementGenerator(object):
         # initialize
         encoder_out = model.forward_encoder([src_tokens, src_lengths])
         if "multi_src_tokens" in sample["net_input"]:
-            print("multi source")
+            # print("multi source")
             prev_decoder_out = model.initialize_output_tokens(
                 encoder_out, multi_src_tokens, retain_origin=self.retain_origin
             )
         else:
-            print("single source")
+            # print("single source")
             prev_decoder_out = model.initialize_output_tokens_(encoder_out, src_tokens)
 
         if self.beam_size > 1:
@@ -240,7 +246,7 @@ class IterativeRefinementGenerator(object):
             }
 
         for step in range(self.max_iter + 1):
-            print("iteration ", str(step))
+            # print("iteration ", str(step))
 
             decoder_options = {
                 "eos_penalty":
@@ -260,6 +266,7 @@ class IterativeRefinementGenerator(object):
             decoder_out = model.forward_decoder(
                 prev_decoder_out, encoder_out, **decoder_options
             )
+            # sys.exit(8)
             # print("decoder out shapes >>>>", decoder_out.output_tokens.shape, decoder_out.output_scores.shape)
             assert decoder_out.output_tokens.shape == decoder_out.output_scores.shape
 

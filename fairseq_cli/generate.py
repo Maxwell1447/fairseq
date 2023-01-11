@@ -370,17 +370,43 @@ def _main(cfg: DictConfig, output_file):
                         # print("multi = ", hypo["history"][0]["tokens"], file=sys.stderr)
                         # print("hypo = ", hypo["history"][-1]["tokens"], file=sys.stderr)
                         # print("origin = ", hypo["origin"], flush=True, file=sys.stderr)
-                        prev_prec, pred_prec, num_prev, num_prec = utils.get_precision_score(
+                        ### NORMAL
+                        prev_prec, pred_prec, num_prev, num_pred = utils.get_precision_score(
                             hypo["history"][-1]["tokens"],
                             target_tokens,
                             hypo["origin"]
                         )
+                        size_hyp = num_prev + num_pred
+
                         print(
-                            "PREC-{}\t{}\t{}\t{}\t{}".format(
-                                sample_id, prev_prec, pred_prec, num_prev, num_prec
+                            "PREC-{}\t{}\t{}\t{}\t{}\t{}".format(
+                                sample_id, prev_prec, pred_prec, num_prev, num_pred, size_hyp
                             ),
                             file=output_file,
                         )
+                        if True:
+                            ### + bi-grams
+                            prev_prev_prec, prev_pred_prec, pred_prev_prec, pred_pred_prec, num_prev_prev, num_prev_pred, num_pred_prev, num_pred_pred = utils.get_bigram_precision_score(
+                                hypo["history"][-1]["tokens"],
+                                target_tokens,
+                                hypo["origin"]
+                            )
+                            print(
+                                "PREC2-{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
+                                    sample_id, prev_prev_prec, prev_pred_prec, pred_prev_prec, pred_pred_prec, num_prev_prev, num_prev_pred, num_pred_prev, num_pred_pred
+                                ),
+                                file=output_file,
+                            )
+                        # print(
+                        #     "ORIGIN-{}\t{}".format(
+                        #         sample_id, str(hypo["origin"][
+                        #             hypo["history"][-1]["tokens"].ne(0) &
+                        #             hypo["history"][-1]["tokens"].ne(1) &
+                        #             hypo["history"][-1]["tokens"].ne(2)
+                        #         ].tolist())[1:-1]
+                        #     ),
+                        #     file=output_file,
+                        # )
 
                     if cfg.generation.retain_iter_history:
                         # print(len(hypo["history"]))

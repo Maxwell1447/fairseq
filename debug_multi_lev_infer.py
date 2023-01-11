@@ -14,10 +14,10 @@ from tqdm import tqdm
 
 
 src_dict = Dictionary.load(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/ECB/data-bin-noised/dict.fr.txt"
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/data-bin_0.4+bin/ECB/m<0.6/dict.fr.txt"
 )
 tgt_dict = Dictionary.load(
-    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/ECB/data-bin-noised/dict.en.txt"
+    "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/data-bin_0.4+bin/ECB/m<0.6/dict.en.txt"
 )
 
 
@@ -75,7 +75,7 @@ def get_batch_iter(
     return epoch_iter
 
 
-def regularize_shapes(x, ys, y):
+def regularize_shapes_(x, ys, y):
     # print("yyys", ys)
     # print("y")
     bsz = x.size(0)
@@ -88,6 +88,27 @@ def regularize_shapes(x, ys, y):
     X[:, 1:-1, : ys.size(-1)] = ys
 
     return X[:, 0, :], X[:, 1:-1, :], X[:, -1, :]
+
+def regularize_shapes(ys, y):
+    bsz = y.size(0)
+    M = max(ys.size(-1), y.size(-1))
+    N = ys.size(1)
+    shape_n = (bsz, N, M)
+    shape = (bsz, M)
+    Xs = ys.new(*shape_n).fill_(tgt_dict.pad())
+    X = y.new(*shape).fill_(tgt_dict.pad())
+    Xs[:, :, :ys.size(-1)] = ys
+    X[:, :y.size(-1)] = y
+
+    return Xs, X
+
+
+def make_multi_collate(ys, M=0):
+    M = max(max([len(y) for y in ys]), M)
+    Ys = ys[0].new(len(ys), M).fill_(tgt_dict.pad())
+    for i in range(len(ys)):
+        Ys[i, :len(ys[i])] = ys[i]
+    return Ys
 
 
 def load_model():
@@ -110,7 +131,7 @@ def load_model():
     # parser.add_argument("--dropout", default=0.3, type=float)
     parser.add_argument(
         "--path", 
-        default="/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/models-small/transformer-multi-lev-fr-en-levtest-8/checkpoint_last.pt"
+        default="/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/models-multidomain/transformer-multi-lev-en-fr-multidomain-3NN-fixed-sel_0.4+bin/checkpoint_last.pt"
     )
     args = options.parse_args_and_arch(parser)
     cfg = convert_namespace_to_omegaconf(args)
@@ -141,14 +162,16 @@ def load_model():
 
 if __name__ == "__main__":
 
+    torch.random.manual_seed(0)
+
     lmd = load_lang_multi_dataset(
-        "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/ECB/data-bin-noised",
-        "valid",
-        "fr",
-        src_dict,
+        "/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/data-bin_0.4+bin/ECB/m<0.6",
+        "test",
         "en",
+        src_dict,
+        "fr",
         tgt_dict,
-        1,
+        3,
         True,
         "mmap",
         -1,
@@ -162,10 +185,53 @@ if __name__ == "__main__":
     model, criterion = load_model()
     model.eval()
 
+    sample = lmd[119]
+
+    # print(sample.keys())
+
+    src_tokens = sample["source"][None, :]
+    src_lengths = src_tokens.ne(tgt_dict.pad()).sum(-1)
+    multi_src_tokens = make_multi_collate(sample["multi_source"], 65)[None, :]
+    target = sample["target"][None, :]
+
+    # decoder_options = {
+    #     "eos_penalty": 3.,
+    #     "max_ratio": 2,
+    #     "decoding_format": None,
+    # }
+
+    # print(lmd[119])
+
+    # with torch.no_grad():
+    #     encoder_out = model.forward_encoder([src_tokens, src_lengths])
+    #     prev_decoder_out = model.initialize_output_tokens(
+    #         encoder_out, multi_src_tokens, retain_origin=False
+    #     )
+
+    #     decoder_out = model.forward_decoder(
+    #         prev_decoder_out, encoder_out, **decoder_options
+    #     )
+
+    #     # print(encoder_out.keys())
+    #     # print(encoder_out["encoder_out"])
+    #     print(">>> encoder", encoder_out["encoder_out"][0].flatten()[:5].numpy())
+
+    #     features, extra = model.decoder.extract_features_multi(
+    #         multi_src_tokens,
+    #         encoder_out=encoder_out,
+    #         early_exit=3,
+    #         layers=None,
+    #         multi_len=True
+    #     )
+
+    #     print(">>> features", features.flatten()[:5].numpy())
+
+
+
     ir = IterativeRefinementGenerator(
         tgt_dict,
         models=[model],
-        eos_penalty=0.0,
+        eos_penalty=3.0,
         max_iter=3,
         max_ratio=2,
         beam_size=1,
@@ -173,6 +239,7 @@ if __name__ == "__main__":
         retain_dropout=False,
         adaptive=True,
         retain_history=True,
+        retain_origin=True,
         reranking=False,
     )
 
@@ -282,14 +349,30 @@ if __name__ == "__main__":
     #         print(sample_extreme.keys())
 
                 
-    device = torch.cuda.is_available()        
+    # device = torch.cuda.is_available()        
 
-    iterator_3000 = get_batch_iter(lmd)
-    data_iter = iterator_3000.next_epoch_itr(shuffle=False)
+    # iterator_3000 = get_batch_iter(lmd)
+    # data_iter = iterator_3000.next_epoch_itr(shuffle=False)
 
-    print(len(data_iter))
+    # print(len(data_iter))
 
-    for _, src, ref, hyp in ir.generate_batched_itr(
+
+    for i in range(1):
+        data_dict = {
+            "id": [0],
+            "target": target,
+            "net_input": {
+                "multi_src_tokens": multi_src_tokens,           
+                "src_lengths": src_lengths,
+                "src_tokens": src_tokens,
+            }
+        }
+        print(data_dict)
+        data_iter = iter([
+            data_dict
+        ])
+        
+        for _, src, ref, hyp in ir.generate_batched_itr(
             data_iter,
             maxlen_a=None,
             maxlen_b=None,
@@ -297,22 +380,29 @@ if __name__ == "__main__":
             timer=None,
             prefix_size=0,
         ):
-        # print(src.shape, ref.shape, hyp.shape)
-        print("-" * 80)
-        print("(S):", src_dict.string(src, None, extra_symbols_to_ignore=None))
-        print("(T):", tgt_dict.string(ref, None, extra_symbols_to_ignore=None))
-        # print(type(hyp), hyp)
-        for i, hyp_step in enumerate(hyp[0]["history"]):
-            if i > 3:
-                loop, step = str((i - 1) // 3), str((i - 1) % 3)
-            else:
-                loop, step = str(0), str(i % 4)
-            print(
-                "(H" + loop + "-" + step + "):",
-                tgt_dict.string(hyp_step["tokens"], None, extra_symbols_to_ignore=None)
-            )
+            # print(src.shape, ref.shape, hyp.shape)
+            # print("-" * 80)
+            # print("(S):", src_dict.string(src, None, extra_symbols_to_ignore=None))
+            # print("(T):", tgt_dict.string(ref, None, extra_symbols_to_ignore=None))
+            # print(hyp)
+            hypo_tokens = hyp[0]["tokens"].int().cpu()
+            print("(H):", hyp[0]["origin"][
+                hypo_tokens.ne(0) &
+                hypo_tokens.ne(1) &
+                hypo_tokens.ne(2)
+            ].tolist())
+    #     # print(type(hyp), hyp)
+    #     for i, hyp_step in enumerate(hyp[0]["history"]):
+    #         if i > 3:
+    #             loop, step = str((i - 1) // 3), str((i - 1) % 3)
+    #         else:
+    #             loop, step = str(0), str(i % 4)
+    #         print(
+    #             "(H" + loop + "-" + step + "):",
+    #             tgt_dict.string(hyp_step["tokens"], None, extra_symbols_to_ignore=None)
+    #         )
 
-    print("over")
+    # print("over")
 
     # sys.exit(8)
 
