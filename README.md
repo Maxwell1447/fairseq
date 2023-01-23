@@ -329,7 +329,6 @@ conda install numpy=1.22.3 \
 conda install \
    gcc_linux-64=7.3.0 \
    gxx_linux-64=7.3.0 \
-   libgcc-ng=12.1.0 \
    ncurses=6.3 \
    scipy=1.7.3 \
    -c anaconda
