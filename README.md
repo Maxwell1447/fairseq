@@ -318,7 +318,8 @@ pip install -e .
 
 #### Various packages
 ```
-conda install numpy=1.22.3 \
+conda install \
+   numpy=1.22.3 \
    ninja=1.11.0 \
    libgfortran-ng=12.2.0 \
    omegaconf=2.0.6 \
