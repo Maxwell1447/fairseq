@@ -324,7 +324,7 @@ conda install numpy=1.22.3 \
    libgfortran-ng=12.2.0 \
    omegaconf=2.0.6 \
    tensorboard=2.6.0 \
-   tensorbordx=2.5 \
+   tensorboardx=2.5 \
    -c conda-forge
 conda install \
    gcc_linux-64=7.3.0 \
