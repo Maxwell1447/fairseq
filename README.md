@@ -31,7 +31,24 @@ several examples positively impacts translation
 scores, notably increasing the number of target
 spans that are copied from existing instances.
 
+## Code changed
 
+* [`setup.py`](./setup.py)
+* [`fairseq_cli/generate.py`](./fairseq_cli/generate.py) $\longrightarrow$ to integrate precision scores + HTML formatted output
+* [`fairseq/clib/libnat2`](./fairseq/clib/libnat2) $\longrightarrow$ C++ DP alignment algorithm
+* [`fairseq/clib/dist_realign_cuda`](./fairseq/clib/dist_realign_cuda) $\longrightarrow$ CUDA/C++ realignment gradient descent
+* `fairseq/data`:
+  * [`multi_source_dataset.py`](./multi_source_dataset.py) $\longrightarrow$ dataset to handle multiple examples additionally to the source and target.
+  * [`data_utils.py`](./data_utils.py) $\longrightarrow$ added filter to remove unfitting samples
+* `fairseq/dataclass/configs` $\longrightarrow$ added new custom parameters
+* `fairseq/tasks/`:
+  * [`translation_lev.py`](./translation_lev.py) $\longrightarrow$ to handle TMs in LevT
+  * [`translation_multi_lev.py`](./translation_multi_lev.py) $\longrightarrow$ new task class for mLevT
+* `fairseq/models/nat`:
+  * [`levenshtein_transformer.py`](./levenshtein_transformer.py) $\longrightarrow$ added code to track origin of hypothesis tokens in LevT
+  * [`levenshtein_utils.py`](./levenshtein_utils.py) $\longrightarrow$ added code to track origin of hypothesis tokens in LevT
+  * [`multi_levenshtein_transformer.py`](./multi_levenshtein_transformer.py) $\longrightarrow$ new model class for mLevT
+  * [`multi_levenshtein_utils.py`](./multi_levenshtein_utils.py) $\longrightarrow$ set of utility functions for mLevT
 
 ## Data preprocessing
 
@@ -42,8 +59,7 @@ Not only the $(\textbf{x}, \textbf{y})$ source/target pairs need to be processed
 
 This step has to be done for each dataset and data split (train, valid, tests...).
 It requires packages [Moses](https://github.com/moses-smt/mosesdecoder/blob/master/scripts/tokenizer/tokenizer.perl) and [Subword-NMT](https://github.com/rsennrich/subword-nmt).
-
-The "..." are to be filled accordingly. 
+The "..." are to be filled by the user accordingly. 
 
 ``` bash
 PATH_TO_DATA_RAW=...
@@ -128,6 +144,8 @@ done;
 ```
 
 ## Training
+
+Before training, one should execute ```python setup.py build_ext --inplace``` to compile the C++ libraries used during training. Be careful, specific versions of various libraries are required! See [this section](#markdown-header-requirements).
 
 Training should be done using GPUs. For stable training, one should consider using (MAX_TOKENS x NUM_GPU) > 18,000. MAX_TOKEN must be as high as possible considering the GPU memory available.
 ``` bash
@@ -248,7 +266,7 @@ grep ^T $INFER_PATH.$l2 | LC_ALL=C sort -V | cut -f2- | perl $DETOKENIZER -l $l2
 grep "^S-" $INFER_PATH.$l2 | LC_ALL=C sort -V | cut -f2- | perl $DETOKENIZER -l $l1 -q \
     > $INFER_PATH.src.test.$l1
 
-grep "^PREC-" $INFER_PATH.$l2 | LC_ALL=C sort -V | cut -f2,4,6 \
+grep "^PREC-" $INFER_PATH.$l2 | LC_ALL=C sort -V  \
     > $INFER_PATH.prec.test.$l2
 
 grep "^PREC2-" $INFER_PATH.$l2 | LC_ALL=C sort -V \
@@ -256,3 +274,25 @@ grep "^PREC2-" $INFER_PATH.$l2 | LC_ALL=C sort -V \
 
 ```
 
+## Requirements
+
+```
+cudatoolkit               11.3.1             
+cudatoolkit-dev           11.3.1               
+gcc_linux-64              7.3.0              
+gxx_linux-64              7.3.0              
+ld_impl_linux-64          2.33.1             
+libgcc-devel_linux-64     11.2.0             
+libgcc-ng                 12.1.0               
+libgfortran-ng            12.2.0               
+libstdcxx-ng              11.2.0             
+ncurses                   6.3                
+ninja                     1.11.0               
+numpy                     1.22.3             
+omegaconf                 2.0.6                
+pytorch                   1.11..8_cuda11.3_cudnn8.2.0_0    
+samtools                  1.6                  
+scipy                     1.7.3              
+tensorboard               2.6.0              
+tensorboardx              2.5                  
+```
