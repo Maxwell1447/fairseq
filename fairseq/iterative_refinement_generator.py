@@ -9,10 +9,12 @@ import numpy as np
 import torch
 from fairseq import utils
 
+import sys
+
 
 DecoderOut = namedtuple(
     "IterativeRefinementDecoderOut",
-    ["output_tokens", "output_scores", "attn", "step", "max_step", "history", "history_ops"],
+    ["output_tokens", "output_scores", "output_origin", "attn", "step", "max_step", "history", "history_ops"],
 )
 
 
@@ -29,6 +31,8 @@ class IterativeRefinementGenerator(object):
         retain_dropout=False,
         adaptive=True,
         retain_history=False,
+        retain_origin=False,
+        realigner="no",
         reranking=False,
         unsquash=False
     ):
@@ -57,6 +61,8 @@ class IterativeRefinementGenerator(object):
         self.decoding_format = decoding_format
         self.retain_dropout = retain_dropout
         self.retain_history = retain_history
+        self.retain_origin = retain_origin
+        self.realigner = realigner
         self.adaptive = adaptive
         self.models = models
         self.unsquash = unsquash
@@ -135,17 +141,16 @@ class IterativeRefinementGenerator(object):
         src_lengths = sample["net_input"]["src_lengths"]
         if "multi_src_tokens" in sample["net_input"]:
             multi_src_tokens = sample["net_input"]["multi_src_tokens"]
-#            multi_src_lens = sample["net_input"]["multi_src_lens"]
         bsz, src_len = src_tokens.size()
 
         # initialize
         encoder_out = model.forward_encoder([src_tokens, src_lengths])
         if "multi_src_tokens" in sample["net_input"]:
-            print("multi source")
-            prev_decoder_out = model.initialize_output_tokens(encoder_out, multi_src_tokens)
+            prev_decoder_out = model.initialize_output_tokens(
+                encoder_out, multi_src_tokens, retain_origin=self.retain_origin
+            )
         else:
-            print("single source")
-            prev_decoder_out = model.initialize_output_tokens(encoder_out, src_tokens)
+            prev_decoder_out = model.initialize_output_tokens_(encoder_out, src_tokens)
 
         if self.beam_size > 1:
             assert (
@@ -182,18 +187,19 @@ class IterativeRefinementGenerator(object):
 
         finalized = [[] for _ in range(bsz)]
 
-        def is_a_loop(x, y, s, a):
+        def is_a_loop(x, y, o, s, a):
             b, l_x, l_y = x.size(0), x.size(1), y.size(1)
             if l_x > l_y:
                 y = torch.cat([y, x.new_zeros(b, l_x - l_y).fill_(self.pad)], 1)
-                s = torch.cat([s, s.new_zeros(b, l_x - l_y)], 1)
+                s = torch.cat([s, s.new_zeros(b, l_x - l_y)], 1) if s is not None else None
+                o = torch.cat([o, o.new_zeros(b, l_x - l_y)], 1)
                 if a is not None:
                     a = torch.cat([a, a.new_zeros(b, l_x - l_y, a.size(2))], 1)
             elif l_x < l_y:
                 x = torch.cat([x, y.new_zeros(b, l_y - l_x).fill_(self.pad)], 1)
-            return (x == y).all(1), y, s, a
+            return (x == y).all(1), y, o, s, a
 
-        def finalized_hypos(step, prev_out_token, prev_out_score, prev_out_attn):
+        def finalized_hypos(step, prev_out_token, prev_out_score, prev_out_origin, prev_out_attn):
             cutoff_mask = prev_out_token.ne(self.pad)
             cutoff = cutoff_mask.sum(-1).max()
             if prev_out_token.dim() == 2:
@@ -206,6 +212,11 @@ class IterativeRefinementGenerator(object):
                 scores = prev_out_score[cutoff_mask]
                 score = scores.mean()
 
+            if prev_out_origin is None:
+                origin = None
+            else:
+                origin = prev_out_origin[cutoff_mask]
+
             if prev_out_attn is None:
                 hypo_attn, alignment = None, None
             else:
@@ -216,13 +227,12 @@ class IterativeRefinementGenerator(object):
                 "tokens": tokens,
                 "positional_scores": scores,
                 "score": score,
+                "origin": origin,
                 "hypo_attn": hypo_attn,
                 "alignment": alignment,
             }
 
         def finalized_ops(step, prev_out_ops, name):
-            # cutoff = prev_out_token.ne(self.pad)
-            # prev_out_ops = prev_out_ops[cutoff] if prev_out_ops.dim() > 0 else None
             return {
                 "steps": step,
                 "ops": prev_out_ops,
@@ -230,42 +240,40 @@ class IterativeRefinementGenerator(object):
             }
 
         for step in range(self.max_iter + 1):
-            print("iteration ", str(step))
-
             decoder_options = {
                 "eos_penalty":
                     0. if (step == 0) else
                     self.eos_penalty,
                 "max_ratio": self.max_ratio,
                 "decoding_format": self.decoding_format,
+                "realigner": self.realigner
             }
             prev_decoder_out = prev_decoder_out._replace(
                 step=step,
                 max_step=self.max_iter + 1,
             )
 
-            # print("prev tokens shapes <<<<", prev_decoder_out.output_tokens.shape)
             decoder_out = model.forward_decoder(
                 prev_decoder_out, encoder_out, **decoder_options
             )
-            # print("decoder out shapes >>>>", decoder_out.output_tokens.shape, decoder_out.output_scores.shape)
             assert decoder_out.output_tokens.shape == decoder_out.output_scores.shape
 
             if self.adaptive and prev_output_tokens.dim() == 2:
                 # terminate if there is a loop
-                terminated, out_tokens, out_scores, out_attn = is_a_loop(
+                terminated, out_tokens, out_scores, out_origin, out_attn = is_a_loop(
                     prev_output_tokens,
                     decoder_out.output_tokens,
                     decoder_out.output_scores,
+                    decoder_out.output_origin,
                     decoder_out.attn,
                 )
                 decoder_out = decoder_out._replace(
                     output_tokens=out_tokens,
                     output_scores=out_scores,
+                    output_origin=out_origin,
                     attn=out_attn,
                 )
                 assert decoder_out.output_tokens.shape == decoder_out.output_scores.shape
-
             else:
                 terminated = decoder_out.output_tokens.new_zeros(
                     decoder_out.output_tokens.size(0)
@@ -283,17 +291,13 @@ class IterativeRefinementGenerator(object):
                 if (decoder_out.attn is None or decoder_out.attn.size(0) == 0)
                 else decoder_out.attn[terminated]
             )
-
-            # print(decoder_out.history)
-            # print(decoder_out.history_ops)
-            # print([h.shape if h is not None else h for h in decoder_out.history])
-            # print([h.shape if h is not None else h for h in decoder_out.history_ops])
-
             
             if self.retain_history:
                 finalized_history_tokens = [h[terminated] for h in decoder_out.history]
                 finalized_history_ops = [(h[0], h[1][terminated]) for h in decoder_out.history_ops]
-                # print("decoder out history tokens :::::: ", finalized_history_tokens)
+
+            if self.retain_origin:
+                finalized_origin = decoder_out.output_origin[terminated]
             
             for i in range(finalized_idxs.size(0)):
                 
@@ -302,6 +306,9 @@ class IterativeRefinementGenerator(object):
                         step,
                         finalized_tokens[i],
                         finalized_scores[i],
+                        finalized_origin[i]
+                        if self.retain_origin
+                        else None,
                         None if finalized_attn is None else finalized_attn[i],
                     )
                 ]
@@ -310,7 +317,7 @@ class IterativeRefinementGenerator(object):
                     for j in range(len(finalized_history_tokens)):
                         finalized[finalized_idxs[i]][0]["history"].append(
                             finalized_hypos(
-                                step, finalized_history_tokens[j][i], None, None
+                                step, finalized_history_tokens[j][i], None, None, None
                             )
                         )
                     finalized[finalized_idxs[i]][0]["history_ops"] = []
@@ -320,6 +327,8 @@ class IterativeRefinementGenerator(object):
                                 step, finalized_history_ops[j][1][i], finalized_history_ops[j][0]
                             )
                         )
+                if self.retain_origin:
+                    finalized[finalized_idxs[i]][0]["origin"] = finalized_origin[i]
 
             # check if all terminated
             if terminated.sum() == terminated.size(0):
@@ -331,6 +340,9 @@ class IterativeRefinementGenerator(object):
             prev_decoder_out = decoder_out._replace(
                 output_tokens=decoder_out.output_tokens[not_terminated],
                 output_scores=decoder_out.output_scores[not_terminated],
+                output_origin=decoder_out.output_origin[not_terminated]
+                if decoder_out.output_origin is not None
+                else None,
                 attn=decoder_out.attn[not_terminated]
                 if (decoder_out.attn is not None and decoder_out.attn.size(0) > 0)
                 else None,

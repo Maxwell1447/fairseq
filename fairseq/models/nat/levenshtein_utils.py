@@ -167,7 +167,7 @@ def _get_del_targets(in_tokens, out_tokens, padding_idx, device=None):
 
 
 def _apply_ins_masks(
-    in_tokens, in_scores, mask_ins_pred, padding_idx, unk_idx, eos_idx
+    in_tokens, in_scores, mask_ins_pred, padding_idx, unk_idx, eos_idx, in_origin=None
 ):
 
     in_masks = in_tokens.ne(padding_idx)
@@ -196,11 +196,17 @@ def _apply_ins_masks(
         out_scores = in_scores.new_zeros(*out_tokens.size())
         out_scores[:, 0] = in_scores[:, 0]
         out_scores.scatter_(1, reordering, in_scores[:, 1:])
+    out_origin = None
+    if in_origin is not None:
+        in_origin.masked_fill_(~in_masks, 0)
+        out_origin = in_origin.new_zeros(*out_tokens.size())
+        out_origin[:, 0] = in_origin[:, 0]
+        out_origin.scatter_(1, reordering, in_origin[:, 1:])
 
-    return out_tokens, out_scores
+    return out_tokens, out_scores, out_origin
 
 
-def _apply_ins_words(in_tokens, in_scores, word_ins_pred, word_ins_scores, unk_idx):
+def _apply_ins_words(in_tokens, in_scores, word_ins_pred, word_ins_scores, unk_idx, in_origin=None):
     word_ins_masks = in_tokens.eq(unk_idx)
     out_tokens = in_tokens.masked_scatter(word_ins_masks, word_ins_pred[word_ins_masks])
 
@@ -210,12 +216,16 @@ def _apply_ins_words(in_tokens, in_scores, word_ins_pred, word_ins_scores, unk_i
         )
     else:
         out_scores = None
+    if in_origin is not None:
+        out_origin = in_origin
+    else:
+        out_origin = None
 
-    return out_tokens, out_scores
+    return out_tokens, out_scores, out_origin
 
 
 def _apply_del_words(
-    in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx, eos_idx
+    in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx, eos_idx, in_origin=None
 ):
     # apply deletion to a tensor
     in_masks = in_tokens.ne(padding_idx)
@@ -232,6 +242,9 @@ def _apply_del_words(
     out_scores = None
     if in_scores is not None:
         out_scores = in_scores.masked_fill(word_del_pred, 0).gather(1, reordering)
+    out_origin = None
+    if in_origin is not None:
+        out_origin = in_origin.masked_fill(word_del_pred, 0).gather(1, reordering)
 
     out_attn = None
     if in_attn is not None:
@@ -239,7 +252,7 @@ def _apply_del_words(
         _reordering = reordering[:, :, None].expand_as(in_attn)
         out_attn = in_attn.masked_fill(_mask, 0.0).gather(1, _reordering)
 
-    return out_tokens, out_scores, out_attn
+    return out_tokens, out_scores, out_attn, out_origin
 
 
 def _skip(x, mask):

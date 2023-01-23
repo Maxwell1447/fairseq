@@ -834,6 +834,18 @@ class GenerationConfig(FairseqDataclass):
             "help": "if set, decoding returns the whole history of iterative refinement"
         },
     )
+    retain_origin: bool = field(
+        default=False,
+        metadata={
+            "help": "if set, decoding returns the origin tensor of the final version of the iterative refinement"
+        },
+    )
+    realigner: str = field(
+        default="no",
+        metadata={
+            "help": "if set, plh decoding is optimized to realign the sentences acc. to the selected method"
+        },
+    )
     formatted_file: str = field(
         default="",
         metadata={

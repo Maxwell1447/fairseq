@@ -3,9 +3,15 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import math
 import torch
 from fairseq.utils import new_arange
 from fairseq import libnat2
+from fairseq import realigner as realigner_module
+from fairseq import dist_realign_cuda as dist_realign_cuda
+
+import time
+import sys
 
 
 def pi_del(
@@ -22,60 +28,6 @@ def pi_del(
     """Operations and states to edit a partially deleted version of y_star back to y_star."""
     # shape = B x N x M    ou B x L
     # y_tgt_star : B x M   ou B x L
-    # if len(shape) == 2:
-    #     # shape = list(shape)
-    #     # shape[-1] = y_tgt_star.size(-1)
-    #     # shape = tuple(shape)
-
-    #     del_tgt = torch.ones(shape, dtype=torch.long, device=device)
-    #     plh_tgt = -torch.ones(
-    #         (shape[0], shape[1] - N), dtype=torch.long, device=device
-    #     )
-    #     cmb_tgt = -torch.ones(shape[0], shape[1], dtype=torch.long, device=device)
-
-    #     y_plh = torch.full(
-    #         (shape[0], shape[1]), pad_symbol, dtype=torch.long, device=device
-    #     )
-    #     y_cmb = torch.full(shape, pad_symbol, dtype=torch.long, device=device)
-    #     y_tok = torch.full_like(y_tgt_star, pad_symbol, dtype=torch.long, device=device)
-
-    #     # y_star_n = y_tgt_star.view(shape[0], 1, shape[-1]).expand(shape)
-    #     y_star_n = torch.cat([y_tgt_star]*3, -1)
-
-    #     # tok_mask = torch.zeros_like(y_star_n, dtype=bool, device=device)
-    #     if mode == "uniform":
-    #         raise NotImplementedError(f"{mode} not implemented")
-    #         ...
-    #     else:
-    #         # what we keep
-    #         mask = (
-    #             ((torch.rand(y_star_n.shape, device=device) > 0.2) & (y_star_n.ne(pad_symbol)))
-    #             | (y_star_n == bos_symbol)
-    #             | (y_star_n == eos_symbol)
-    #         )
-        
-    #     sorted_ = mask.long().sort(stable=True, descending=True, dim=-1)
-    #     sorted_mask = sorted_[0].bool()
-    #     y_plh[sorted_mask] = y_star_n[mask]
-    #     y_cmb[y_star_n.ne(pad_symbol)] = plh_symbol
-    #     y_cmb[mask] = y_star_n[mask]
-    #     y_tok[y_tgt_star.ne(pad_symbol)] = plh_symbol
-
-    #     tok_mask = mask.any(1) # if any seq_i kept
-    #     y_tok[tok_mask] = y_tgt_star[tok_mask]
-
-    #     idx = sorted_[1]
-
-    #     plh_tgt = idx[:, :, 1:] - idx[:, :, :-1] - 1
-    #     plh_tgt[~sorted_mask[:, :, 1:]] = 0
-    #     plh_tgt = plh_tgt.clamp(0, Kmax - 1)
-
-    #     cmb_tgt = mask.long()
-
-    #     plh_mask = y_plh.ne(pad_symbol)[:, :, 1:]
-    #     del_mask = torch.zeros(shape, dtype=bool, device=device)
-    #     cmb_mask = y_tgt_star.ne(pad_symbol).view(shape[0], 1, shape[-1]).expand_as(y_cmb)
-    # else:
     shape = list(shape)
     shape[-1] = y_tgt_star.size(-1)
     shape = tuple(shape)
@@ -94,7 +46,6 @@ def pi_del(
 
     y_star_n = y_tgt_star.view(shape[0], 1, shape[-1]).expand(shape)
 
-    # tok_mask = torch.zeros_like(y_star_n, dtype=bool, device=device)
     if mode == "uniform":
         raise NotImplementedError(f"{mode} not implemented")
         ...
@@ -155,7 +106,6 @@ def pi_del_single(
     """Operations and states to edit a partially deleted version of y_star back to y_star."""
     # y_tgt_star : B x M
     shape = list(y_tgt_star.shape)
-    # shape[1] = input_len
 
     plh_tgt = -torch.ones(
         (shape[0], shape[1] - 1), dtype=torch.long, device=device
@@ -177,20 +127,12 @@ def pi_del_single(
             1.
         )
         cutoff = 2 + ((lengths - 2).unsqueeze(1) * score_select.new_zeros(y_tgt_star.size(0), 1).uniform_()).long()
-        # print("cutoff", cutoff, "/", lengths)
-        # print("select", score_select)
-        # print("sorted select", score_select.sort(1)[1])
         mask_index = torch.arange(shape[1], dtype=torch.long, device=device)[None, :].expand_as(y_tgt_star) < cutoff
         indexes = score_select.sort(dim=1, stable=True)[1]
         indexes[~mask_index] = 0
         mask = torch.zeros_like(tgt_mask)
-        # print(indexes)
         batch_index = torch.arange(shape[0], dtype=torch.long, device=device)[:, None].expand_as(y_tgt_star)
         mask[batch_index, indexes] = True
-        # mask = score_select.sort(dim=1, stable=True)[1] < cutoff
-        # print("mask", mask)
-        
-        # print(mask.long())
     else:
         # mask of what is kept
         mask = (
@@ -201,7 +143,6 @@ def pi_del_single(
 
     sorted_ = mask.long().sort(stable=True, descending=True, dim=-1)
     sorted_mask = sorted_[0].bool()
-    # print(y_plh.shape, sorted_mask.shape, y_tgt_star.shape, mask.shape)
     y_plh[sorted_mask] = y_tgt_star[mask]
 
     idx = sorted_[1]
@@ -310,12 +251,14 @@ def pi_star(
 
 
 def handle_all_plh_case(cmb_tgt, y_tok, y_cmb, plh_symbol):
-    msk_cmb_sel = ((y_tok == plh_symbol) & ((y_cmb == plh_symbol).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == plh_symbol)
+    # if position with only plh, consider them as acceptable, but only if plh
+    # msk_cmb_sel = ((y_tok == plh_symbol) & ((y_cmb == plh_symbol).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == plh_symbol)
+    msk_cmb_sel = ((y_tok == plh_symbol) & (~cmb_tgt.any(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == plh_symbol)
     cmb_tgt[msk_cmb_sel] = 1
     return cmb_tgt
 
 
-def apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx, eos_idx):
+def apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx, eos_idx, in_origin=None):
     # word_del_pred: B x N x M in {False, True}
     # apply deletion to a tensor
     in_masks = in_tokens.ne(padding_idx)
@@ -334,6 +277,9 @@ def apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx
     out_scores = None
     if in_scores is not None:
         out_scores = in_scores.masked_fill(word_del_pred, 0).gather(2, reordering)
+    out_origin = None
+    if in_origin is not None:
+        out_origin = in_origin.masked_fill(word_del_pred, 0).gather(2, reordering)
 
     out_attn = None
     if in_attn is not None:
@@ -341,40 +287,38 @@ def apply_del(in_tokens, in_scores, in_attn, word_del_pred, padding_idx, bos_idx
         _reordering = reordering[:, :, :, None].expand_as(in_attn)
         out_attn = in_attn.masked_fill(_mask, 0.0).gather(2, _reordering)
 
-    return out_tokens, out_scores, out_attn
+    return out_tokens, out_scores, out_attn, out_origin
 
 
-def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx):
+def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx, to_ignore_mask=None, in_origin=None):
     # plh_pred: B x N x M in {0, 1, ..., K_max - 1}
-    # print("in tokens shape =", in_tokens.shape)
-    # print("plh_pred shape  =", plh_pred.shape )
     in_masks = in_tokens.ne(padding_idx)
     in_lengths = in_masks.sum(2)
-    # print("in toks", in_tokens[1].squeeze().cpu().numpy())
-    # print("plh pred", plh_pred[1].squeeze().cpu().numpy())
 
     # HACK: hacky way to shift all the paddings to eos first.
     in_tokens.masked_fill_(~in_masks, eos_idx)
     plh_pred.masked_fill_(~in_masks[:, :, 1:], 0)
 
     out_lengths = in_lengths + plh_pred.sum(2)  # B x N
-    # print("out_lengths", out_lengths.squeeze().cpu().numpy())
     out_masks = (
         new_arange(out_lengths, out_lengths.max())[None, :] < out_lengths[:, :, None]
     )
-    # print("out_masks", out_masks.squeeze().cpu().numpy())
 
     reordering = (plh_pred + in_masks[:, :, 1:].long()).cumsum(2)
-    # print("reordering", reordering.squeeze().cpu().numpy())
     out_tokens = (
         in_tokens.new_zeros(in_tokens.size(0), in_tokens.size(1), out_lengths.max())
         .fill_(padding_idx)
         .masked_fill_(out_masks, unk_idx)
     )
     out_tokens[:, :, 0] = in_tokens[:, :, 0]
-    # print(out_tokens[:, :, 1:].shape, reordering.shape, in_tokens[:, :, 1:].shape)
-    # print(reordering.max(), out_lengths.max())
-    out_tokens[:, :, :].scatter_(2, reordering, in_tokens[:, :, 1:])
+
+    out_tokens.scatter_(2, reordering, in_tokens[:, :, 1:])
+    out_tokens.scatter_(2, reordering[:, :, -1:], eos_idx)
+
+    if to_ignore_mask is not None:
+        idx_n = to_ignore_mask.to(torch.int16).argsort(-1)[:, 0][:, None].expand(out_tokens.size(0), out_tokens.size(1))
+        idx_b = torch.arange(out_tokens.size(0), device=out_tokens.device)[:, None].expand_as(idx_n)
+        out_tokens[to_ignore_mask] = out_tokens[idx_b[to_ignore_mask], idx_n[to_ignore_mask]]
 
     out_scores = None
     if in_scores is not None:
@@ -382,16 +326,28 @@ def apply_plh(in_tokens, in_scores, plh_pred, padding_idx, unk_idx, eos_idx):
         out_scores = in_scores.new_zeros(*out_tokens.size())
         out_scores[:, :, 0] = in_scores[:, :, 0]
         out_scores.scatter_(2, reordering, in_scores[:, :, 1:])
+        out_scores.scatter_(2, reordering[:, :, -1:], 0)
 
-    # print("out toks", out_tokens[1].squeeze().cpu().numpy())
+    out_origin = None
+    if in_origin is not None:
+        in_origin.masked_fill_(~in_masks, 0)
+        out_origin = in_origin.new_zeros(*out_tokens.size())
+        out_origin[:, :, 0] = in_origin[:, :, 0]
+        out_origin.scatter_(2, reordering, in_origin[:, :, 1:])
+        out_origin.scatter_(2, reordering[:, :, -1:], 0)
 
-    return out_tokens, out_scores
+    return out_tokens, out_scores, out_origin
 
 
-def apply_cmb(in_tokens, in_scores, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx):
+def apply_cmb(in_tokens, in_scores, cmb_pred, padding_idx, bos_idx, eos_idx, unk_idx, in_origin=None):
     # combine choice
     # cmb_pred: B x M x N in [0, 1] (float!)
     # in_tokens: B x N x M
+    lengths = in_tokens.ne(padding_idx).sum(-1)
+    cmb_pred[
+        (in_tokens == eos_idx).transpose(1, 2) &
+        (lengths.ne(lengths.max(-1)[0][..., None]))[..., None, :]
+    ] = torch.finfo(cmb_pred.dtype).min
     cmb_pred = cmb_pred.max(-1)[1]
     in_masks = in_tokens.ne(padding_idx)
     in_cmb_lengths = (in_masks.sum(1) > 0).sum(-1)  # B
@@ -403,7 +359,6 @@ def apply_cmb(in_tokens, in_scores, cmb_pred, padding_idx, bos_idx, eos_idx, unk
         new_arange(in_cmb_lengths, in_tokens.size(-1))[None, :]
         < in_cmb_lengths[:, None]
     )
-    #    out_tokens[out_masks] = unk_idx
 
     idx1 = (
         new_arange(in_cmb_lengths, in_tokens.size(0))
@@ -428,11 +383,21 @@ def apply_cmb(in_tokens, in_scores, cmb_pred, padding_idx, bos_idx, eos_idx, unk
         )
         chosen_score = in_scores.transpose(1, 2)[idx1, idx2, cmb_pred]
         out_scores[out_masks] = chosen_score[out_masks]
+    out_origin = None
+    if in_origin is not None:
+        out_origin = torch.full(
+            (in_tokens.size(0), in_tokens.size(2)),
+            0.,
+            device=in_origin.device,
+            dtype=in_origin.dtype
+        )
+        chosen_origin = in_origin.transpose(1, 2)[idx1, idx2, cmb_pred]
+        out_origin[out_masks] = chosen_origin[out_masks]
 
-    return out_tokens, out_scores
+    return out_tokens, out_scores, out_origin
 
 
-def apply_tok(in_tokens, in_scores, tok_pred, tok_scores, unk_idx):
+def apply_tok(in_tokens, in_scores, tok_pred, tok_scores, unk_idx, in_origin=None):
     tok_masks = in_tokens.eq(unk_idx)
     out_tokens = in_tokens.masked_scatter(tok_masks, tok_pred[tok_masks])
 
@@ -442,9 +407,233 @@ def apply_tok(in_tokens, in_scores, tok_pred, tok_scores, unk_idx):
         )
     else:
         out_scores = None
+    if in_origin is not None:
+        out_origin = in_origin
+    else:
+        out_origin = None
 
-    return out_tokens, out_scores
+    return out_tokens, out_scores, out_origin
 
+
+def realign_dp_malign(
+    tokens_to_realign,
+    logits,
+    p_cost=0.2,
+    r_cost=1.0,
+    alpha=0.5,
+    M=2,
+    use_alpha_max=False,
+    eos=2,
+):
+    t1 = time.time()
+    print("\n<<<", flush=True, file=sys.stderr)
+    realigner = realigner_module.RealignBatch(
+        tokens_to_realign.cpu(),
+        logits.cpu().float(),
+        p_cost,
+        r_cost,
+        alpha,
+        eos,
+        M,
+        use_alpha_max
+    )
+    print("\ntime =", time.time() - t1, flush=True, file=sys.stderr)
+    return realigner.get_realigned_plh_pred().to(tokens_to_realign.device), realigner.get_success_mask().bool().to(tokens_to_realign.device)
+
+
+def build_alignment_graph(x, logits, pad, max_dist=2.5):
+    init_t = logits.argmax(-1)
+    b = init_t.size(0)
+    n = init_t.size(1)
+    l = init_t.size(2) + 1
+    init_pos = torch.zeros(b, n, l, dtype=init_t.dtype, device=init_t.device)
+    init_pos[..., 1:] = init_t + 1
+    init_pos = init_pos.cumsum(-1).float()
+
+    if max_dist is not None and max_dist < l:
+        dist_tensor = torch.cdist(
+            init_pos.view(b, -1)[..., None], init_pos.view(b, -1)[..., None], p=1.0
+        ).view(b, n, l, n, l)
+
+    graph = dist_realign_cuda.get_graph(x, pad).bool()
+    if max_dist is not None and max_dist < l:
+        graph = graph & (dist_tensor <= max_dist)
+
+    graph_mask = graph.view(b, n, l, -1).any(-1)
+    graph = graph.long()
+
+    return graph, graph_mask
+
+
+def compute_regression_normal(logits, logits_mask):
+    probs = torch.softmax(logits[logits_mask], dim=-1) ** 2
+    probs = probs / probs.sum(-1)[..., None]
+    arr = torch.arange(probs.size(-1), device=logits.device, dtype=logits.dtype)[
+        None, :
+    ]
+    mu = (probs * arr).sum(-1)
+    sigma2 = (probs * (arr**2)).sum(-1) - mu**2
+    mu = (mu + 5 * logits[logits_mask].argmax(-1)) / 6
+    return mu, sigma2.clamp(0.1, 2.0)
+
+
+def log_prob_loss_multinomial_pdf(params, logits, sigma=1.0, tau=1.0):
+    # params: M
+    # logits: M x (Kmax + 1)
+    p = torch.exp(tau * (logits - logits.max(-1)[0][:, None]))
+    p /= p.sum(-1)[:, None]
+    ii = torch.arange(logits.size(-1) + 1, device=p.device, dtype=p.dtype)[None, :]
+
+    # numerically stable log-sum-exp
+    xs = - 0.5 * ((params[:, None] - ii) / sigma) ** 2  # M x (Kmax + 1)
+    max_stablizer = xs.max(-1)[0]
+    ys = torch.log(torch.exp(xs - max_stablizer[:, None]).sum(-1)) # M
+    
+    return ys.sum()
+
+def log_prob_loss_normal(t, mask_param, mu, sigma2):
+    return ((t[mask_param] - mu) ** 2 / (2 * sigma2)).sum()
+
+
+def length_loss(t, mask_param):
+    lengths = mask_param.sum(-1) + t.sum(-1)
+    mean_length = lengths.detach().mean(-1)[..., None].expand_as(lengths)
+    y = torch.sigmoid((lengths - mean_length) * 4 * 2.0)
+    return (1 - 4 * (1 - y) * y).sum()
+
+
+def integer_loss(t, mask_param):
+    return (torch.sin(t[mask_param] * torch.pi) ** 2).sum()
+
+
+def lambda_t(it, kind="square", start=0, end=100, gamma=1.0):
+    if it < start:
+        return 0.0
+    if it > end:
+        return gamma
+    if kind == "square":
+        g = gamma / (end - start) ** 2
+        return g * (it - start) ** 2
+    else:
+        return 0.0
+
+
+def align_tok_loss(t, graph, graph_mask, per_batch=False, p=1):
+    b = t.size(0)
+    n = t.size(1)
+    l = t.size(2) + 1
+    pos = torch.zeros(b, n, l, dtype=t.dtype, device=t.device)
+    pos[..., 1:] = t + 1
+    pos = pos.cumsum(-1)
+
+    min_dist_align = dist_realign_cuda.scatter_dist_lp(graph, pos, graph_mask.long(), p)
+
+    min_dist_align[~graph_mask]
+    if per_batch:
+        min_dist_align[~graph_mask] = 0.0
+        min_dist_align = min_dist_align.view(min_dist_align.size(0), -1).sum(-1)
+        return min_dist_align / graph_mask.view(graph_mask.size(0), -1).sum(-1)
+
+    return min_dist_align[graph_mask].sum()
+
+"""
+optuna_best = {
+    'max_dist': 5,
+    'lr': 0.005,
+    'momentum': 0.97,
+    'scheduler_sqrt_rate': 0.5,
+    'num_iter': 100,
+    'alpha': 0.4,
+    'gamma': 0.8,
+    'start': 0.65,
+    'end': 0.8,
+    'len_loss_scale': 0.6
+}
+"""
+def realign_grad_descent(
+    x,
+    logits,
+    Kmax=64,
+    bos=0,
+    pad=1,
+    eos=2,
+    unk=3,
+    max_dist=5.0,
+    lr=0.005,
+    momentum=0.97,
+    scheduler_sqrt_rate=0.5,
+    num_iter=100,
+    alpha=0.4,
+    gamma=0.8,
+    start=0.65,
+    end=0.8,
+    len_loss_scale=0.6,
+    p=2,
+    log_prob_loss_type="normal_regression",
+    sigma=1.0,
+    tau=1.0
+):
+    mask_param = x[..., 1:].ne(pad)
+
+    if log_prob_loss_type == "normal_regression":
+        mu, sigma2 = compute_regression_normal(logits, mask_param)
+    elif log_prob_loss_type == "multinomial_pdf":
+        mu = logits[mask_param].argmax(-1).to(logits.dtype)
+
+    params_ = mu.clamp(0, Kmax)
+
+    with torch.enable_grad():
+        params_.requires_grad_()
+
+        graph, graph_mask = build_alignment_graph(x, logits, pad, max_dist=max_dist)
+
+        ##### OPTIMZER PARAMS
+        optimizer = torch.optim.SGD([params_], lr=lr, momentum=momentum)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, lr_lambda=(lambda x: 1.0 / math.sqrt(x * scheduler_sqrt_rate + 1.0))
+        )
+
+        for it in range(num_iter):
+            optimizer.zero_grad()
+            params = torch.zeros_like(x[..., :-1], dtype=logits.dtype)
+            params[mask_param] = params_
+            if log_prob_loss_type == "normal_regression":
+                loss_prob = log_prob_loss_normal(params, mask_param, mu, sigma2)
+            elif log_prob_loss_type == "multinomial_pdf":
+                loss_prob = log_prob_loss_multinomial_pdf(params[mask_param], logits[mask_param], sigma=sigma, tau=tau)
+            loss_len = (
+                length_loss(params, mask_param)
+                if len_loss_scale > 0.0
+                else torch.tensor(0.0, device=x.device)
+            )
+            
+            loss_align = align_tok_loss(params, graph, graph_mask, p=p)
+            loss = alpha * loss_prob + (1 - alpha) * loss_align + loss_len * len_loss_scale
+            int_loss = integer_loss(params, mask_param)
+
+            loss_tot = (
+                loss
+                + lambda_t(
+                    it,
+                    start=start * num_iter,
+                    end=end * num_iter,
+                    gamma=gamma,
+                    kind="square",
+                )
+                * int_loss
+            )
+
+            loss_tot.backward()
+            
+            optimizer.step()
+            scheduler.step()
+            params_.data = torch.clamp(params_, 0, Kmax)
+
+    params = torch.zeros_like(x[..., :-1], dtype=x.dtype)
+    params[mask_param] = params_.detach().round().to(x.dtype)
+    return params
+    
+    
 
 def _skip(x, mask):
     """
@@ -515,7 +704,6 @@ def _fill(x, mask, y, padding_idx):
     elif x.dim() == 3 and (x.size(2) > y.size(2)):
         x[mask] = padding_idx
         x[mask, :, :y.size(2)] = y
-        # raise NotImplementedError("not implemented by myself")
     else:
         x[mask] = y
     return x
