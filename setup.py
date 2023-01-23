@@ -127,16 +127,8 @@ try:
             )
         ]
     )
-    extensions.extend(
-        [
-            cpp_extension.CppExtension(
-                "fairseq.realigner", sources=["fairseq/clib/realigner/src/malign.cpp",],
-            )
-        ]
-    )
-    print("...................", os.environ)
+
     if "CUDA_HOME" in os.environ:
-        # print("true")
         extensions.extend(
             [
                 cpp_extension.CppExtension(

@@ -7,9 +7,10 @@
 */
 
 #include "edit_dist.h"
-#include <THC/THC.h>
+// #include <THC/THC.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <c10/cuda/CUDAStream.h>
 #include <device_launch_parameters.h>
 #include <utility>      // std::pair
 
