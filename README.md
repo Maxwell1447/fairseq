@@ -145,7 +145,7 @@ done;
 
 ## Training
 
-Before training, one should execute ```python setup.py build_ext --inplace``` to compile the C++ libraries used during training. Be careful, specific versions of various libraries are required! See [this section](##requirements).
+Before training, one should execute ```python setup.py build_ext --inplace``` to compile the C++ libraries used during training. Be careful, specific versions of various libraries are required! See [this section](#requirements).
 
 Training should be done using GPUs. For stable training, one should consider using (MAX_TOKENS x NUM_GPU) > 18,000. MAX_TOKEN must be as high as possible considering the GPU memory available.
 ``` bash
