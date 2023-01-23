@@ -300,3 +300,34 @@ scipy                     1.7.3
 tensorboard               2.6.0              
 tensorboardx              2.5                  
 ```
+
+#### conda new environnement
+```
+conda create -n fairseq python=3.8
+conda activate fairseq
+```
+
+#### pytorch + CUDA install
+`conda install pytorch==1.11.0 torchvision==0.12.0 torchaudio==0.11.0 cudatoolkit=11.3 -c pytorch`
+
+#### fairseq installation
+```
+git clone https://github.com/Maxwell1447/fairseq
+cd fairseq
+pip install -e .
+```
+
+#### multiple various packages
+```
+conda install numpy=1.22.3 \
+   ninja=1.11.0 \
+   libgfortran-ng=12.2.0 \
+   -c conda-forge
+conda install \
+   gcc_linux-64=7.3.0 \
+   gxx_linux-64=7.3.0 \
+   libgcc-ng=12.1.0 \
+   ncurses=6.3 \
+   -c anaconda
+   
+```
