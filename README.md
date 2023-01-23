@@ -286,10 +286,7 @@ cudatoolkit-dev           11.3.1
 gcc_linux-64              7.3.0              
 gxx_linux-64              7.3.0              
 ld_impl_linux-64          2.33.1             
-libgcc-devel_linux-64     11.2.0             
-libgcc-ng                 12.1.0               
 libgfortran-ng            12.2.0               
-libstdcxx-ng              11.2.0             
 ncurses                   6.3                
 ninja                     1.11.0               
 numpy                     1.22.3             
@@ -308,7 +305,9 @@ conda activate fairseq
 ```
 
 #### pytorch + CUDA install
-`conda install pytorch==1.11.0 torchvision==0.12.0 torchaudio==0.11.0 cudatoolkit=11.3 -c pytorch`
+```
+conda install pytorch==1.11.0 torchvision==0.12.0 torchaudio==0.11.0 cudatoolkit=11.3 -c pytorch
+```
 
 #### fairseq installation
 ```
@@ -317,7 +316,7 @@ cd fairseq
 pip install -e .
 ```
 
-#### multiple various packages
+#### Various packages
 ```
 conda install numpy=1.22.3 \
    ninja=1.11.0 \
@@ -333,4 +332,9 @@ conda install \
    scipy=1.7.3 \
    -c anaconda
 conda install -c bioconda samtools=1.6
+```
+
+#### Compiling C++ libraries
+```
+python setup.py build_ext --inplace
 ```
