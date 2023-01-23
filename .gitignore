@@ -140,8 +140,11 @@ workspace.code-workspace
 fairseq/clib/libnat2/.edit_dist.cpp.swo
 fairseq/clib/libnat2/.edit_dist.cpp.swp
 
+# ignore experimental C++
+fairseq/clib/realigner
+
 # ignore debug and tests
 logs/
 *.pt
-debug_grad_descent_realigner*
-run_debug_grad_descent*
+debug_*
+run_debug_*
