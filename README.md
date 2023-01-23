@@ -279,6 +279,8 @@ grep "^PREC2-" $INFER_PATH.$l2 | LC_ALL=C sort -V \
 We advice to use a virutal environnement such as conda with the following package versions:
 
 ```
+python                    3.8
+
 cudatoolkit               11.3.1             
 cudatoolkit-dev           11.3.1               
 gcc_linux-64              7.3.0              
