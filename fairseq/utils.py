@@ -342,28 +342,15 @@ def write_formatted_ops_and_stages(
 
 def get_precision_score(hyp, tgt_tokens, origin, pad=1, eos=2, bos=0):
     origin = origin[:hyp.size(0)]
-    # print("origin:\n", origin.shape, "\n", origin, file=sys.stderr)
-    # print("hyp:\n", hyp.shape, "\n", hyp, file=sys.stderr, flush=True)
     prev_origin_msk = (origin > 0) & hyp.ne(pad) & hyp.ne(bos) & hyp.ne(eos)
     pred_origin_msk = (origin == 0) & hyp.ne(pad) & hyp.ne(bos) & hyp.ne(eos)
     prev_vals, prev_cpt = hyp[prev_origin_msk].unique(return_counts=True)
     pred_vals, pred_cpt = hyp[pred_origin_msk].unique(return_counts=True)
     tgt_vals, tgt_cpt = tgt_tokens.unique(return_counts=True)
 
-
-    # tgt_size = (tgt_tokens.ne(pad) & tgt_tokens.ne(bos) & tgt_tokens.ne(eos)).sum()
-    # assert tgt_size >= prev_origin_msk.sum() + pred_origin_msk.sum(), f"{tgt_size} > {prev_origin_msk.sum() + pred_origin_msk.sum()}"
-
-    # print("prev_origin_msk", prev_origin_msk)
-    # print("pred_origin_msk", pred_origin_msk)
-
     prev_dict = dict(zip(prev_vals.tolist(), prev_cpt.tolist()))
     pred_dict = dict(zip(pred_vals.tolist(), pred_cpt.tolist()))
     tgt_dict = dict(zip(tgt_vals.tolist(), tgt_cpt.tolist()))
-
-    # print("prev_dict", prev_dict)
-    # print("pred_dict", pred_dict)
-    # print("tgt_dict", tgt_dict)
 
     prev_precision = 0.
     for tok in prev_dict:
@@ -382,8 +369,6 @@ def get_precision_score(hyp, tgt_tokens, origin, pad=1, eos=2, bos=0):
 
 def get_bigram_precision_score(hyp, tgt_tokens, origin, pad=1, eos=2, bos=0):
     origin = origin[:hyp.size(0)]
-    # print("origin:\n", origin.shape, "\n", origin, file=sys.stderr)
-    # print("hyp:\n", hyp.shape, "\n", hyp, file=sys.stderr, flush=True)
     prev_origin_msk = (origin > 0) & hyp.ne(pad) & hyp.ne(bos) & hyp.ne(eos)
     pred_origin_msk = (origin == 0) & hyp.ne(pad) & hyp.ne(bos) & hyp.ne(eos)
 
@@ -401,22 +386,11 @@ def get_bigram_precision_score(hyp, tgt_tokens, origin, pad=1, eos=2, bos=0):
     pred_pred_vals, pred_pred_cpt = bigram_hyp[pred_pred_origin_msk].unique(return_counts=True, dim=0)
     bigram_tgt_vals, bigram_tgt_cpt = bigram_tgt.unique(return_counts=True, dim=0)
 
-
-    # tgt_size = (tgt_tokens.ne(pad) & tgt_tokens.ne(bos) & tgt_tokens.ne(eos)).sum()
-    # assert tgt_size >= prev_origin_msk.sum() + pred_origin_msk.sum(), f"{tgt_size} > {prev_origin_msk.sum() + pred_origin_msk.sum()}"
-
-    # print("prev_origin_msk", prev_origin_msk)
-    # print("pred_origin_msk", pred_origin_msk)
-
     prev_prev_dict = dict(zip([tuple(e) for e in prev_prev_vals.tolist()], prev_prev_cpt.tolist()))
     prev_pred_dict = dict(zip([tuple(e) for e in prev_pred_vals.tolist()], prev_pred_cpt.tolist()))
     pred_prev_dict = dict(zip([tuple(e) for e in pred_prev_vals.tolist()], pred_prev_cpt.tolist()))
     pred_pred_dict = dict(zip([tuple(e) for e in pred_pred_vals.tolist()], pred_pred_cpt.tolist()))
     bigram_tgt_dict = dict(zip([tuple(e) for e in bigram_tgt_vals.tolist()], bigram_tgt_cpt.tolist()))
-
-    # print("prev_dict", prev_dict)
-    # print("pred_dict", pred_dict)
-    # print("tgt_dict", tgt_dict)
 
     prev_prev_precision = 0.
     for tok in prev_prev_dict:

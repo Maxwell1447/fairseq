@@ -54,8 +54,6 @@ def build_model(cfg: FairseqDataclass, task):
 
     model = None
     model_type = getattr(cfg, "_name", None) or getattr(cfg, "arch", None)
-    # print(cfg)
-    # print(model_type)
 
     if not model_type and len(cfg) == 1:
         # this is hit if config object is nested in directory that is named after model type

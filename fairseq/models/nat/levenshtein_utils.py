@@ -217,9 +217,6 @@ def _apply_ins_words(in_tokens, in_scores, word_ins_pred, word_ins_scores, unk_i
     else:
         out_scores = None
     if in_origin is not None:
-        # out_origin = in_origin.masked_scatter(
-        #     word_ins_masks, word_ins_scores[word_ins_masks]
-        # )
         out_origin = in_origin
     else:
         out_origin = None

@@ -238,16 +238,6 @@ class TranslationMultiLevenshteinTask(TranslationTask):
     """
 
     cfg: TranslationMultiLevenshteinConfig
-
-    #    @staticmethod
-    #    def add_args(parser):
-    #        TranslationTask.add_args(parser)
-    #        parser.add_argument(
-    #            "--num-retrieved",
-    #            default=3,
-    #            type=int,
-    #            help="Number of sentences retrieved, then edited together to form the final sentence",
-    #        )
     tokenizer = None
 
     def load_dataset(self, split, epoch=1, combine=False, **kwargs):
@@ -469,8 +459,6 @@ class TranslationMultiLevenshteinTask(TranslationTask):
         # add models input to match the API for SequenceGenerator
         from fairseq.iterative_refinement_generator import IterativeRefinementGenerator
 
-        #        from fairseq.sequence_generator import SequenceGenerator
-
         return IterativeRefinementGenerator(
             self.target_dictionary,
             beam_size=getattr(args, "decode_with_beam", 1),
@@ -508,7 +496,6 @@ class TranslationMultiLevenshteinTask(TranslationTask):
         self, sample, model, criterion, optimizer, update_num, ignore_grad=False
     ):
         model.train()
-        # sample["prev_target"] = self.inject_noise(sample["target"])
         sample["prev_target"] = None
         sample["num_iter"] = update_num
 

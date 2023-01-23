@@ -367,10 +367,6 @@ def _main(cfg: DictConfig, output_file):
                             file=output_file,
                         )
                     if cfg.generation.retain_origin and cfg.generation.retain_iter_history:
-                        # print("multi = ", hypo["history"][0]["tokens"], file=sys.stderr)
-                        # print("hypo = ", hypo["history"][-1]["tokens"], file=sys.stderr)
-                        # print("origin = ", hypo["origin"], flush=True, file=sys.stderr)
-                        ### NORMAL
                         prev_prec, pred_prec, num_prev, num_pred = utils.get_precision_score(
                             hypo["history"][-1]["tokens"],
                             target_tokens,
@@ -384,35 +380,20 @@ def _main(cfg: DictConfig, output_file):
                             ),
                             file=output_file,
                         )
-                        if True:
-                            ### + bi-grams
-                            prev_prev_prec, prev_pred_prec, pred_prev_prec, pred_pred_prec, num_prev_prev, num_prev_pred, num_pred_prev, num_pred_pred = utils.get_bigram_precision_score(
-                                hypo["history"][-1]["tokens"],
-                                target_tokens,
-                                hypo["origin"]
-                            )
-                            print(
-                                "PREC2-{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
-                                    sample_id, prev_prev_prec, prev_pred_prec, pred_prev_prec, pred_pred_prec, num_prev_prev, num_prev_pred, num_pred_prev, num_pred_pred
-                                ),
-                                file=output_file,
-                            )
-                        # print(
-                        #     "ORIGIN-{}\t{}".format(
-                        #         sample_id, str(hypo["origin"][
-                        #             hypo["history"][-1]["tokens"].ne(0) &
-                        #             hypo["history"][-1]["tokens"].ne(1) &
-                        #             hypo["history"][-1]["tokens"].ne(2)
-                        #         ].tolist())[1:-1]
-                        #     ),
-                        #     file=output_file,
-                        # )
+                        ### + bi-grams
+                        prev_prev_prec, prev_pred_prec, pred_prev_prec, pred_pred_prec, num_prev_prev, num_prev_pred, num_pred_prev, num_pred_pred = utils.get_bigram_precision_score(
+                            hypo["history"][-1]["tokens"],
+                            target_tokens,
+                            hypo["origin"]
+                        )
+                        print(
+                            "PREC2-{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(
+                                sample_id, prev_prev_prec, prev_pred_prec, pred_prev_prec, pred_pred_prec, num_prev_prev, num_prev_pred, num_pred_prev, num_pred_pred
+                            ),
+                            file=output_file,
+                        )
 
                     if cfg.generation.retain_iter_history:
-                        # print(len(hypo["history"]))
-                        # print("history >>> ", hypo["history"])
-                        # print(len(hypo["history_ops"]))
-                        # print("history ops >>>", hypo["history_ops"])
                         if cfg.generation.formatted_file is not None and cfg.generation.formatted_file != "":
                             utils.write_formatted_ops_and_stages(
                                 src_str,
