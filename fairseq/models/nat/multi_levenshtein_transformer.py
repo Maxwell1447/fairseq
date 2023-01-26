@@ -1121,13 +1121,6 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                 seq_emb = self.embed_seq_num(
                     (prev_output_squashed == self.bos).cumsum(-1) - 1
                 )
-                # # print("seq emb", seq_emb.shape)
-                # # print("index emb", (prev_output_squashed == self.bos).cumsum(-1).shape)
-                # inn = (prev_output_squashed == self.bos).cumsum(-1)[..., None] - 1
-                # # inn = seq_emb
-
-                # np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.seq.{self.cpt_save}.npy", self.multi_unsquash(inn, flat_index, shape_multi[1], shape_multi[2]).view(shape_multi[0], shape_multi[1], shape_multi[2], -1).cpu().numpy())
-                # # np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.embed-pos.{self.cpt_save}.npy", self.multi_unsquash(x, flat_index, shape_multi[1], shape_multi[2]).cpu().numpy())
             else:
                 seq_emb = self.embed_seq_num(
                     torch.arange(
@@ -1138,12 +1131,6 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                     prev_output_tokens.size(0), 1, 1)
                 seq_emb = seq_emb.unsqueeze(2).repeat(
                     1, 1, prev_output_tokens.size(2), 1)
-                # np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.seq.unsquashed.{self.cpt_save}.npy", torch.arange(
-                #         prev_output_tokens.size(1), device=prev_output_tokens.device
-                #     ).unsqueeze(-1).unsqueeze(0).repeat(
-                #     prev_output_tokens.size(0), 1, 1).unsqueeze(2).repeat(
-                #     1, 1, prev_output_tokens.size(2), 1).view(shape_multi[0], shape_multi[1], shape_multi[2], -1).cpu().numpy())
-            
 
             tok_emb = self.embed_scale * self.embed_tokens(prev_output_tokens)
             # change shape (batch x N x M x p) to (batch x NM x p)
@@ -1187,17 +1174,8 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
         if positions is not None:
             x += positions
 
-
-
         if seq_emb is not None:
             x += seq_emb
-
-        # if self.squash_multi_toks:
-        #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.embed-seq.{self.cpt_save}.npy", self.multi_unsquash(x, flat_index, shape_multi[1], shape_multi[2]).cpu().numpy())
-        # else:
-        #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.embed-seq.unsquashed.{self.cpt_save}.npy", x.view(x.size(0), shape_multi[1], shape_multi[2], -1).cpu().numpy())
-        # sys.exit(0)
-
 
         x = self.dropout_module(x)
 
@@ -1277,12 +1255,6 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                     extra["attn"], extra["flat_index"], extra["N"], extra["L"]
                 )
         if normalize:
-            # if "flat_index" in extra:
-            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.toks.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
-            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.logits.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
-            # elif multi_len:
-            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.toks.unsquashed.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
-            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.del.logits.unsquashed.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
             return F.log_softmax(decoder_out, -1), extra["attn"]
         return decoder_out, extra["attn"]
 
@@ -1319,14 +1291,6 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
             )
         decoder_out = F.linear(features_cat, self.embed_plh.weight)
         if normalize:
-            # if "flat_index" in extra:
-            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.toks.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
-            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.logits.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
-            #     self.cpt_save += 1
-            # elif multi_len:
-            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.toks.unsquashed.{self.cpt_save}.npy", prev_output_tokens.cpu().numpy())
-            #     np.save(f"/gpfswork/rech/usb/ufn16wp/NLP4NLP/DATA/multi-domain/infer-logits/ECB.logits.unsquashed.{self.cpt_save}.npy", F.log_softmax(decoder_out, -1).cpu().numpy())
-            #     self.cpt_save += 1
             return F.log_softmax(decoder_out, -1), extra["attn"]
         return decoder_out, extra["attn"]
 

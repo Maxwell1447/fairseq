@@ -285,7 +285,6 @@ cudatoolkit               11.3.1
 cudatoolkit-dev           11.3.1               
 gcc_linux-64              7.3.0              
 gxx_linux-64              7.3.0              
-ld_impl_linux-64          2.33.1             
 libgfortran-ng            12.2.0               
 ncurses                   6.3                
 ninja                     1.11.0               
