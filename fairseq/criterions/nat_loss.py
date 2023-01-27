@@ -31,7 +31,7 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
         )
 
     def _compute_loss(
-        self, outputs, targets, masks=None, label_smoothing=0.0, name="loss", factor=1.0
+        self, outputs, targets, masks=None, label_smoothing=0.0, name="loss", factor=1.0, ls_type="uniform"
     ):
         """
         outputs: batch x len x d_model
@@ -48,6 +48,16 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
                 if dim is None
                 else x.float().mean(dim).type_as(x)
             )
+        
+        def binomial_ds(x: Tensor, t: Tensor, dim=None, tau=5) -> Tensor:
+            binomial_dist = torch.distributions.binomial.Binomial(x.size(1), probs=t/x.size(1))
+            ps = torch.softmax(tau * binomial_dist.log_prob(torch.arange(x.size(1))[:, None]), -1)
+            return (ps * x.float()).sum(-1).mean().as_type(x)
+            # return (
+            #     x.float().mean().type_as(x)
+            #     if dim is None
+            #     else x.float().mean(dim).type_as(x)
+            # )
 
         if masks is not None:
             outputs = outputs[masks]
@@ -68,8 +78,12 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
 
             nll_loss = mean_ds(losses)
             if label_smoothing > 0:
+                if ls_type == "binomial":
+                    smoothed = -binomial_ds(logits, targets) # binomial
+                else:
+                    smoothed = -mean_ds(logits) # uniform
                 loss = (
-                    nll_loss * (1 - label_smoothing) - mean_ds(logits) * label_smoothing
+                    nll_loss * (1 - label_smoothing) + smoothed * label_smoothing
                 )
             else:
                 loss = nll_loss
@@ -111,6 +125,7 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
                     outputs[obj].get("ls", 0.0),
                     name=obj + "-loss",
                     factor=outputs[obj].get("factor", 1.0),
+                    ls_type=outputs[obj].get("ls-type", "uniform")
                 )
             else:
                 _losses = self._custom_loss(

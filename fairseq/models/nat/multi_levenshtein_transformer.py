@@ -423,60 +423,59 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         post_plh_out, _ = self.decoder.forward_plh(
             normalize=False, prev_output_tokens=y_post_plh, encoder_out=encoder_out,
         )
-        if True:
-            with torch.no_grad():
-                # apply post_plh_out to y_post_plh
-                post_plh_pred = post_plh_out.max(-1)[1]
+        with torch.no_grad():
+            # apply post_plh_out to y_post_plh
+            post_plh_pred = post_plh_out.max(-1)[1]
 
-                # Add a penalty by substraction in the prediction of plh
-                # to ensure the sum does not get higher than 255.
-                plh_penalty = torch.max(
-                    post_plh_pred.max(-1)[0] * (1 - (255 - y_post_plh.ne(
-                        self.pad).sum(-1)) / (post_plh_pred.sum(-1) + 1)),
-                    torch.zeros_like(post_plh_pred[:, 0])
-                )[:, None].expand_as(post_plh_pred)
-                post_plh_pred = torch.max(
-                    post_plh_pred - plh_penalty.long(),
-                    torch.zeros_like(post_plh_pred)
-                )
-
-                y_post_tok, _, _ = _apply_ins_masks(
-                    y_post_plh.clone(),
-                    None,
-                    post_plh_pred,
-                    self.pad,
-                    self.unk,
-                    self.eos,
-                )
-                extra_mask = y_post_tok.ne(self.unk)
-                post_tok_out, _ = self.decoder.forward_tok(
-                    normalize=False, prev_output_tokens=y_post_tok, encoder_out=encoder_out,
-                )
-                # apply post_tok_out to y_post_tok
-                if self.decoder.sampling_for_deletion:
-                    y_post_del_extra = torch.multinomial(
-                        F.softmax(post_tok_out, -1).view(-1,
-                                                         post_tok_out.size(-1)), 1
-                    ).view(post_tok_out.size(0), -1)
-                else:
-                    y_post_del_extra = F.log_softmax(
-                        post_tok_out, dim=-1).max(2)[1]
-                y_post_del_extra.masked_scatter_(
-                    extra_mask,
-                    y_post_tok[extra_mask]
-                )
-                post_del_extra_tgt = _get_del_targets(
-                    y_post_del_extra,
-                    tgt_tokens,
-                    self.pad,
-                    device=tgt_tokens.device
-                )
-                post_del_extra_mask = (
-                    y_post_del_extra.ne(self.pad)
-                )
-            post_del_extra_out, _ = self.decoder.forward_del(
-                normalize=False, prev_output_tokens=y_post_del_extra, encoder_out=encoder_out,
+            # Add a penalty by substraction in the prediction of plh
+            # to ensure the sum does not get higher than 255.
+            plh_penalty = torch.max(
+                post_plh_pred.max(-1)[0] * (1 - (255 - y_post_plh.ne(
+                    self.pad).sum(-1)) / (post_plh_pred.sum(-1) + 1)),
+                torch.zeros_like(post_plh_pred[:, 0])
+            )[:, None].expand_as(post_plh_pred)
+            post_plh_pred = torch.max(
+                post_plh_pred - plh_penalty.long(),
+                torch.zeros_like(post_plh_pred)
             )
+
+            y_post_tok, _, _ = _apply_ins_masks(
+                y_post_plh.clone(),
+                None,
+                post_plh_pred,
+                self.pad,
+                self.unk,
+                self.eos,
+            )
+            extra_mask = y_post_tok.ne(self.unk)
+            post_tok_out, _ = self.decoder.forward_tok(
+                normalize=False, prev_output_tokens=y_post_tok, encoder_out=encoder_out,
+            )
+            # apply post_tok_out to y_post_tok
+            if self.decoder.sampling_for_deletion:
+                y_post_del_extra = torch.multinomial(
+                    F.softmax(post_tok_out, -1).view(-1,
+                                                        post_tok_out.size(-1)), 1
+                ).view(post_tok_out.size(0), -1)
+            else:
+                y_post_del_extra = F.log_softmax(
+                    post_tok_out, dim=-1).max(2)[1]
+            y_post_del_extra.masked_scatter_(
+                extra_mask,
+                y_post_tok[extra_mask]
+            )
+            post_del_extra_tgt = _get_del_targets(
+                y_post_del_extra,
+                tgt_tokens,
+                self.pad,
+                device=tgt_tokens.device
+            )
+            post_del_extra_mask = (
+                y_post_del_extra.ne(self.pad)
+            )
+        post_del_extra_out, _ = self.decoder.forward_del(
+            normalize=False, prev_output_tokens=y_post_del_extra, encoder_out=encoder_out,
+        )
 
         output = dict()
 
@@ -490,7 +489,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             "out": plh_out,
             "tgt": plh_tgt,
             "mask": plh_mask,
-            "ls": 0.01,
+            "ls": 0.2, # original = 0.01
+            "ls-type": "binomial"
         }
         output["cmb"] = {
             "out": cmb_out,
@@ -513,6 +513,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             "out": post_plh_out,
             "tgt": post_plh_tgt,
             "mask": post_plh_mask,
+            "ls": 0.2, # original = 0.0
+            "ls-type": "binomial"
         }
         output["post_word_del_extra"] = {
             "out": post_del_extra_out,
