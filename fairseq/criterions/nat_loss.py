@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import math
+import sys
 
 import torch
 import torch.nn.functional as F
@@ -49,15 +50,12 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
                 else x.float().mean(dim).type_as(x)
             )
         
-        def binomial_ds(x: Tensor, t: Tensor, dim=None, tau=5) -> Tensor:
+        def binomial_ds(x: Tensor, t: Tensor, dim=None, tau=1) -> Tensor:
             binomial_dist = torch.distributions.binomial.Binomial(x.size(1), probs=t/x.size(1))
-            ps = torch.softmax(tau * binomial_dist.log_prob(torch.arange(x.size(1))[:, None]), -1)
-            return (ps * x.float()).sum(-1).mean().as_type(x)
-            # return (
-            #     x.float().mean().type_as(x)
-            #     if dim is None
-            #     else x.float().mean(dim).type_as(x)
-            # )
+            ps = torch.softmax(tau * binomial_dist.log_prob(torch.arange(x.size(1), device=x.device)[:, None]).T, -1)
+            # print("ps", ps.shape, file=sys.stderr)
+            # print("x", x.shape, file=sys.stderr)
+            return (ps * x.float()).sum(-1).mean().type_as(x)
 
         if masks is not None:
             outputs = outputs[masks]
@@ -92,7 +90,7 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
         return {"name": name, "loss": loss, "nll_loss": nll_loss, "factor": factor}
 
     def _custom_loss(self, loss, name="loss", factor=1.0):
-        return {"name": name, "loss": loss, "factor": factor}
+        return {"name": name, "loss": loss * factor, "factor": factor}
 
     def forward(self, model, sample, reduce=True):
         """Compute the loss for the given sample.
