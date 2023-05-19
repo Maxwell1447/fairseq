@@ -11,7 +11,8 @@ from fairseq import realigner as realigner_module
 from fairseq import dist_realign_cuda as dist_realign_cuda
 try:
     from fairseq import libnat2_cuda
-
+except:
+    ...
 import time
 import sys
 
@@ -304,24 +305,26 @@ def pi_star_2(
 
     # del
     del_mask = y_del.ne(pad)
-    del_tgt = graph_left & del_mask 
+    del_tgt = (graph_left & del_mask).long()
     # TODO: verify keep or delete !!!! --> seems to be keep for pi_star
     # plh
-    sorted_left = (~graph_left).argsort(-1)
+    sorted_left = torch.argsort((~graph_left).int(), dim=-1, stable=True)
     y_plh = y_del.gather(-1, sorted_left)
     y_plh[..., 1:][(y_plh == eos).cumsum(-1)[..., :-1].bool()] = 1
     plh_mask = y_plh[..., 1:].ne(pad)
-    sorted_right = (~graph_right).argosrt(-1)
+    sorted_right = torch.argsort((~graph_right).int(), dim=-1, stable=True)
     plh_tgt = sorted_right[..., 1:] - sorted_right[..., :-1] - 1
-    plh_tgt[plh_tgt < 0] = 0
+    plh_tgt[~plh_mask] = 0
     # cmb
     cmb_mask = y_star[:, None, :].ne(pad).expand_as(y_del)
-    cmb_tgt = (~graph_right & cmb_mask).long()
+    cmb_tgt = (graph_right & cmb_mask).long()
+    cmb_tgt_inv = ~graph_right & cmb_mask
+    # print(cmb_tgt_inv)
     y_cmb = y_star[:, None, :].expand_as(y_del).clone()
-    y_cmb[cmb_tgt.bool()] = unk
+    y_cmb[cmb_tgt_inv] = unk
     # tok
     y_tok = y_star.clone()
-    y_tok[cmb_tgt.all(1)] = unk
+    y_tok[cmb_tgt_inv.all(1)] = unk
     tok_mask = (y_tok == unk)
     tok_tgt = y_star
 
