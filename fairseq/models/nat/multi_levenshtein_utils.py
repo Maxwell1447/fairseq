@@ -9,6 +9,8 @@ from fairseq.utils import new_arange
 from fairseq import libnat2
 from fairseq import realigner as realigner_module
 from fairseq import dist_realign_cuda as dist_realign_cuda
+try:
+    from fairseq import libnat2_cuda
 
 import time
 import sys
@@ -250,6 +252,95 @@ def pi_star(
     }
 
 
+def pi_star_2(
+    y_del, y_star, pad=1, unk=3, eos=2
+):
+    """Optimal operations and states to edit y_del to y_star"""
+    # y_del : B x N x M
+    # y_star : B x M
+    assert y_del.device() != torch.device('cpu')
+
+    mask = libnat2_cuda.get_mask(y_star, y_del, pad)
+    inverse_mask = (~mask) & (y_del.ne(pad))
+    # print("inverse mask:\n", inverse_mask.cpu().numpy())
+
+    J = inverse_mask.argsort(dim=-1, stable=True)
+    idx = torch.arange(y_del.size(-1), device=y_del.device)[None, None, :].expand_as(y_del)
+    Is = idx[
+        torch.arange(y_del.size(0), device=y_del.device)[:, None, None],
+        torch.arange(y_del.size(1), device=y_del.device)[None, :, None],
+        J
+    ]
+    lens_short = mask.sum(-1).int()
+    # print("Is:\n", Is)
+    # print("lens:\n", lens_short)
+    max_short_len = lens_short.max().item()
+    Is = Is[..., :max_short_len].clone()
+
+    ref_mask = libnat2_cuda.get_ref_mask(y_star, y_del, Is, max_short_len, pad)
+    # print("ref mask:\n", ref_mask.cpu().numpy())
+    # (~ref_mask).argsort(dim=-1, stable=True)
+    idx = torch.arange(y_del.size(1) * y_star.size(1), device=y_del.device, dtype=torch.int32).view(1, y_star.size(1), y_del.size(1)).expand(y_del.size(0), y_star.size(1), y_del.size(1))
+    
+    G = idx[ref_mask.bool()].clone()
+    # print("shape :", idx.shape, ref_mask.shape)
+    # print("G:\n", G)
+    
+    G_offsets = torch.zeros(y_star.size(0) + 1, dtype=torch.int32, device=y_star.device)
+    G_offsets[1:] = ref_mask.view(y_star.size(0), -1).sum(-1).cumsum(-1).int()
+    # print("offsets:\n", G_offsets.cpu().numpy())
+
+    V = build_min_preference(y_star, y_del, Is, max_short_len, pad)
+    # print(f"V: ({V.dtype})\n", V.cpu().numpy())
+
+    max_len = max(y_star.size(1), y_del.size(2))
+    # print(ys.shape)
+    solver = libnat2_cuda.MultiLevEditOps(y_star, y_del, Is.int(), lens_short, G, G_offsets, V, max_short_len, max_len, pad, unk)
+
+    graph_left = solver.get_graph_left().bool()
+    graph_right = solver.get_graph_right().bool()
+
+    #### DEDUCE OPS
+
+    # del
+    del_mask = y_del.ne(pad)
+    del_tgt = graph_left & del_mask 
+    # TODO: verify keep or delete !!!! --> seems to be keep for pi_star
+    # plh
+    sorted_left = (~graph_left).argsort(-1)
+    y_plh = y_del.gather(-1, sorted_ins)
+    y_plh[..., 1:][(y_plh == eos).cumsum(-1)[..., :-1].bool()] = 1
+    plh_mask = y_plh[..., 1:].ne(pad)
+    sorted_right = (~graph_right).argosrt(-1)
+    plh_tgt = sorted_right[..., 1:] - sorted_right[..., :-1] - 1
+    plh_tgt[plh_tgt < 0] = 0
+    # cmb
+    cmb_mask = y_star[:, None, :].ne(pad).expand_as(y_del)
+    cmb_tgt = (~graph_right & cmb_mask).long()
+    y_cmb = y_star[:, None, :].expand_as(y_del).clone()
+    y_cmb[cmb_tgt.bool()] = unk
+    # tok
+    y_tok = y_star.clone()
+    y_tok[cmb_tgt.all(1)] = unk
+    tok_mask = (y_tok == unk)
+    tok_tgt = y_star
+
+
+    return {
+        "del_tgt": del_tgt,
+        "plh_tgt": plh_tgt.clamp(0, Kmax - 1),
+        "cmb_tgt": cmb_tgt,
+        "tok_tgt": tok_tgt,
+        "del_mask": del_mask,
+        "plh_mask": plh_mask,
+        "cmb_mask": cmb_mask,
+        "tok_mask": tok_mask,
+        "y_plh": y_plh,
+        "y_cmb": y_cmb,
+        "y_tok": y_tok,
+    }
+
+
 def handle_all_plh_case(cmb_tgt, y_tok, y_cmb, plh_symbol):
     # if position with only plh, consider them as acceptable, but only if plh
     # msk_cmb_sel = ((y_tok == plh_symbol) & ((y_cmb == plh_symbol).all(1))).unsqueeze(1).expand_as(cmb_tgt) & (y_cmb == plh_symbol)
@@ -479,13 +570,13 @@ def compute_regression_normal(logits, logits_mask):
 
 def log_prob_loss_multinomial_pdf(params, logits, sigma=1.0, tau=1.0):
     # params: M
-    # logits: M x (Kmax + 1)
+    # logits: M x Kmax
     p = torch.exp(tau * (logits - logits.max(-1)[0][:, None]))
     p /= p.sum(-1)[:, None]
     ii = torch.arange(logits.size(-1) + 1, device=p.device, dtype=p.dtype)[None, :]
 
     # numerically stable log-sum-exp
-    xs = - 0.5 * ((params[:, None] - ii) / sigma) ** 2  # M x (Kmax + 1)
+    xs = - 0.5 * ((params[:, None] - ii) / sigma) ** 2  # M x Kmax
     max_stablizer = xs.max(-1)[0]
     ys = torch.log(torch.exp(xs - max_stablizer[:, None]).sum(-1)) # M
     
@@ -580,7 +671,7 @@ def realign_grad_descent(
     elif log_prob_loss_type == "multinomial_pdf":
         mu = logits[mask_param].argmax(-1).to(logits.dtype)
 
-    params_ = mu.clamp(0, Kmax)
+    params_ = mu.clamp(0, Kmax - 1)
 
     with torch.enable_grad():
         params_.requires_grad_()
@@ -627,7 +718,7 @@ def realign_grad_descent(
             
             optimizer.step()
             scheduler.step()
-            params_.data = torch.clamp(params_, 0, Kmax)
+            params_.data = torch.clamp(params_, 0, Kmax - 1)
 
     params = torch.zeros_like(x[..., :-1], dtype=x.dtype)
     params[mask_param] = params_.detach().round().to(x.dtype)
