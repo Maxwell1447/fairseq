@@ -253,7 +253,7 @@ def pi_star(
 
 
 def pi_star_2(
-    y_del, y_star, pad=1, unk=3, eos=2
+    y_del, y_star, pad=1, unk=3, eos=2, Kmax=64
 ):
     """Optimal operations and states to edit y_del to y_star"""
     # y_del : B x N x M
@@ -308,7 +308,7 @@ def pi_star_2(
     # TODO: verify keep or delete !!!! --> seems to be keep for pi_star
     # plh
     sorted_left = (~graph_left).argsort(-1)
-    y_plh = y_del.gather(-1, sorted_ins)
+    y_plh = y_del.gather(-1, sorted_left)
     y_plh[..., 1:][(y_plh == eos).cumsum(-1)[..., :-1].bool()] = 1
     plh_mask = y_plh[..., 1:].ne(pad)
     sorted_right = (~graph_right).argosrt(-1)
