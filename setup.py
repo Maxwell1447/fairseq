@@ -139,6 +139,13 @@ try:
                     ],
                 ),
                 cpp_extension.CppExtension(
+                    "fairseq.libnat_cuda",
+                    sources=[
+                        "fairseq/clib/libnat2_cuda/multialign.cu",
+                        "fairseq/clib/libnat2_cuda/binding.cpp",
+                    ],
+                ),
+                cpp_extension.CppExtension(
                     "fairseq.ngram_repeat_block_cuda",
                     sources=[
                         "fairseq/clib/cuda/ngram_repeat_block_cuda.cpp",
