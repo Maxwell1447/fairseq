@@ -290,7 +290,7 @@ def pi_star_2(
     G_offsets[1:] = ref_mask.view(y_star.size(0), -1).sum(-1).cumsum(-1).int()
     # print("offsets:\n", G_offsets.cpu().numpy())
 
-    V = build_min_preference(y_star, y_del, Is, max_short_len, pad)
+    V = libnat2_cuda.build_min_preference(y_star, y_del, Is, max_short_len, pad)
     # print(f"V: ({V.dtype})\n", V.cpu().numpy())
 
     max_len = max(y_star.size(1), y_del.size(2))
