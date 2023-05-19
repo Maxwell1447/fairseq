@@ -63,6 +63,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         self.full_mlevt = getattr(args, "full_mlevt_align", False)
         self.max_valency = getattr(args, "max_valency", 10)
         self.curriculum_post_del_extra = args.curriculum_post_del_extra
+        self.clf_num = getattr(args, "clf_num", 1)
         if self.use_insert_distribution:
             self.insert_distribution = torch.distributions.normal.Normal
             self.insert_no_distribution = torch.distributions.exponential.Exponential(rate=torch.tensor(2.))
@@ -175,6 +176,11 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             type=float,
             help="Variance of the chosen distribution.",
         )
+        parser.add_argument(
+            "--clf-num",
+            type=int,
+            help="Number of classes starting from 0 where the insertion of placeholders is considered as a classification problem.",
+        )
 
     @classmethod
     def build_decoder(cls, args, tgt_dict, embed_tokens):
@@ -212,93 +218,33 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             res[key][~mask] = res2[key]
         return res
 
-    def distribution_loss_(self, plh_out, plh_tgt, plh_mask):
-        plh_out = plh_out[plh_mask]
-        plh_tgt = plh_tgt[plh_mask]
-        log_ins = self.insert_distribution(
-            loc=plh_out[..., 0],
-            scale=torch.full_like(plh_out[..., 0], self.insert_var)
-        ).log_prob(plh_tgt)
-        log_no_ins = self.insert_no_distribution.log_prob(plh_tgt)
-        factor = torch.sigmoid(plh_out[..., 1])
-        a_max = torch.maximum(log_ins, log_no_ins)
-
-        print(factor.shape, log_no_ins.shape, log_ins.shape, file=sys.stderr)
-
-        shift_logit = torch.log(factor * torch.exp(log_no_ins - a_max) + (1 - factor) * torch.exp(log_ins - a_max))
-
-        return -shift_logit.mean()
-
     def distribution_loss(self, plh_out, plh_tgt, plh_mask):
         plh_out = plh_out[plh_mask]
         plh_tgt = plh_tgt[plh_mask]
 
-        mask_ins = plh_tgt > 0
-        plh_tgt = plh_tgt.to(plh_out.dtype)
+        logits = F.log_softmax(plh_out[..., :-1], dim=-1)
+        loss_clf = F.nll_loss(
+            logits.float(),
+            plh_tgt.clamp(0, self.clf_num),
+            reduction="none"
+        ).mean().to(plh_out.dtype)
+
+        mask_ins = plh_tgt >= self.clf_num
+        
         if mask_ins.any():
-            loss_mu = 0.01 * self.MSE(plh_out[..., 0][mask_ins], plh_tgt[mask_ins])
+            loss_mu = 0.001 * self.MSE(plh_out[..., -1][mask_ins], plh_tgt[mask_ins].to(plh_out.dtype))
         else:
             loss_mu = 0
-        # m = torch.sigmoid(plh_out[..., 1])
-        loss_no_ins = self.BCE(plh_out[..., 1], (~mask_ins).to(plh_out.dtype))
-        # if torch.isnan(loss_no_ins) or torch.isinf(loss_no_ins):
-        #     print("loss no ins =", loss_no_ins.detach(), file=sys.stderr)
-        # if torch.isnan(loss_mu) or torch.isinf(loss_mu):
-        #     print("loss mus =", loss_mu.detach(), file=sys.stderr)
-        # if loss_no_ins < 0:
-        #     print(loss_no_ins.detach(), loss_mu.detach(), file=sys.stderr)
-        #     torch.save(plh_out[..., 1].cpu(), "/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/plh_out.pt")
-        #     torch.save(plh_tgt.cpu(), "/gpfswork/rech/usb/ufn16wp/NLP4NLP/scripts/multi-lev/logs/plh_tgt.pt")
-        #     sys.exit(8)
-        return loss_mu + loss_no_ins
-        # return loss_mu
 
-    def predict_plh_from_out_(self, plh_out, penalty=0.0, max_insert=128):
-        ii = torch.arange(max_insert, device=plh_out.device)
-        log_no_ins = self.insert_no_distribution.log_prob(ii)
-        shape = plh_out[..., 0].shape + ii.shape
-        log_ins = self.insert_distribution(
-            loc=plh_out[..., 0].view(-1)[:, None],
-            scale=torch.full_like(plh_out[..., 0].view(-1)[:, None], self.insert_var)
-        ).log_prob(ii).view(shape)
-        log_no_ins = torch.log_softmax(log_no_ins, -1)[None, None, :]
-        log_ins = torch.log_softmax(log_ins, -1)
-        factor = torch.sigmoid(plh_out[..., 1])[..., None]
-
-        # print("factor no ins =", plh_out[..., 1].mean(), file=sys.stderr)
-        # print("mu =", plh_out[..., 0].mean(), file=sys.stderr)
-
-        return (factor * torch.exp(log_no_ins) + (1 - factor) * torch.exp(log_ins)).max(-1)[1]
-
-    def predict_plh_from_out__(self, plh_out, penalty=0.0, max_insert=128):
-        penalty = 0.5 * penalty
-        ii = torch.arange(max_insert, device=plh_out.device)
-        log_no_ins = self.insert_no_distribution.log_prob(ii)
-        shape = plh_out[..., 0].shape + ii.shape
-        log_ins = self.insert_distribution(
-            loc=plh_out[..., 0].view(-1)[:, None],
-            scale=torch.full_like(plh_out[..., 0].view(-1)[:, None], self.insert_var)
-        ).log_prob(ii).view(shape)
-        log_no_ins = torch.log_softmax(log_no_ins, -1)[None, None, :]
-        log_ins = torch.log_softmax(log_ins, -1)
-        factor = torch.sigmoid(plh_out[..., 1] - penalty)[..., None]
-
-        # print("factor no ins =", plh_out[..., 1].mean(), file=sys.stderr)
-        # print("mu =", plh_out[..., 0].mean(), file=sys.stderr)
-
-        return (factor * torch.exp(log_no_ins) + (1 - factor) * torch.exp(log_ins)).max(-1)[1]
+        return loss_mu + loss_clf
 
     def predict_plh_from_out(self, plh_out, penalty=0.0, max_insert=128):
-        penalty = 0.2 * penalty
-        insert_mask = (plh_out[..., 1] - penalty) < 0
-        out = torch.zeros_like(insert_mask, dtype=torch.long)
-        out[insert_mask] = torch.clamp(torch.round(plh_out[..., 0][insert_mask]).long(), 0, max_insert)
+        plh_out[..., 0] -= penalty
+        pred = plh_out[..., :-1].argmax(-1)
+        insert_mask = (pred == (self.clf_num - 1))
+        pred[insert_mask] = torch.clamp(torch.round(plh_out[..., -1][insert_mask]).long(), 0, max_insert)
 
-        # print("factor no ins =", plh_out[..., 1].mean(), file=sys.stderr)
-        # print("mu =", plh_out[..., 0].mean(), file=sys.stderr)
-
-        return out
-
+        return pred
 
 
     def forward(self, src_tokens, src_lengths, prev_output_tokens, tgt_tokens, num_iter, ids=None, **kwargs):
@@ -387,7 +333,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                     )
                     y_cmb_bad.append(masked_tgt_tokens)
                     plh_tgt_bad.append(mask_ins_targets.clamp(
-                        min=0, max=63).unsqueeze(1))  # for safe prediction
+                        min=0, max=self.Kmax - 1).unsqueeze(1))  # for safe prediction
                     plh_mask_bad.append(
                         y_plh_bad_[:, 1:].ne(self.pad).unsqueeze(1))
                 del_tgt_bad = torch.cat(del_tgt_bad, dim=1)
@@ -725,7 +671,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                     self.encoder, encoder_out, can_plh),
             )
             if eos_penalty > 0.0: # TODO: adapt to distro-plh
-                plh_out[:, :, :, 0] = plh_out[:, :, :, 0] - eos_penalty
+                plh_out[..., 0] = plh_out[..., 0] - eos_penalty
             output_tokens_to_plh = _skip(output_tokens, can_plh)
             if plh_out.size(1) > 1:
                 if realigner == "dp_malign":
@@ -735,10 +681,27 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                     plh_pred_success = realign_grad_descent(output_tokens_to_plh, plh_out, eos=self.eos)
                 elif realigner == "grad_descent_multinomial":
                     if self.use_insert_distribution:
+                        # TODO: adapt to clf/continuous mix
+                        #### OLD
+                        # plh_out_ = self.insert_distribution(
+                        #     loc=plh_out.squeeze(-1),
+                        #     scale=torch.full_like(plh_out, self.insert_var).squeeze(-1)
+                        # ).log_prob(torch.arange(self.Kmax * 2))
+                        #### NEW
+                        # clf_penalty = plh_out[..., -2]
+                        prob_clf = torch.softmax(plh_out[..., :-1], -1)[..., -1][..., None]
+                        # continuous_penalty = torch.log(1 - torch.exp(clf_penalty)) # make numerically stable
+                        clf_penalty = torch.log(prob_clf)
+                        continuous_penalty = torch.log(1 - prob_clf)
                         plh_out_ = self.insert_distribution(
-                            loc=plh_out.squeeze(-1),
-                            scale=torch.full_like(plh_out, self.insert_var).squeeze(-1)
-                        ).log_prob(torch.arange(self.Kmax * 2))
+                            loc=plh_out[..., -1].squeeze(-1),
+                            scale=torch.full_like(plh_out[..., -1], self.insert_var).squeeze(-1)
+                        ).log_prob(torch.arange(self.Kmax))
+                        plh_out_[..., self.num_clf:] = torch.log_softmax(plh_out_[..., self.num_clf:], -1) - continuous_penalty
+                        # mask_clf = plh_out.argmax(-1) < self.clf_num
+                        # prob_clf = torch.log_softmax(plh_out[..., :-1], -1)[..., -1][..., None]
+                        # plh_out_[mask_clf] = plh_out[mask_clf]
+                        plh_out_[..., :self.num_clf] = clf_penalty + torch.log_softmax(plh_out[..., :-2], -1)
                         # no upper limit
                         # TODO: adapt realign_grad_descent() to handle the distribution
                     else:
@@ -773,13 +736,13 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
 
             ##### PLH PRED
             if self.use_insert_distribution:
-                plh_pred = torch.zeros_like(plh_out[..., 0], dtype=torch.long)
+                plh_pred = torch.zeros_like(plh_out[..., -1], dtype=torch.long)
                 # plh_pred[~success_mask] = torch.round(plh_out[~success_mask].squeeze(-1))
                 plh_pred[~success_mask] = self.predict_plh_from_out(plh_out[~success_mask])
                 if success_mask.any():
                     plh_pred[success_mask] = plh_pred_success[success_mask]
             else:
-                plh_pred = torch.zeros_like(plh_out[..., 0], dtype=torch.long)
+                plh_pred = torch.zeros_like(plh_out[..., -1], dtype=torch.long)
                 plh_pred[~success_mask] = plh_out[~success_mask].max(-1)[1]
                 if success_mask.any():
                     plh_pred[success_mask] = plh_pred_success[success_mask]
@@ -1120,12 +1083,12 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
         self.pad = dictionary.pad()
         self.sampling_for_deletion = getattr(
             args, "sampling_for_deletion", False)
-        self.Kmax = 64
+        self.Kmax = args.plh_max_num_insert
         self.use_insert_distribution = getattr(args, "continuous_insert", False)
         self.insert_var = getattr(args, "insert_var", 4.0)
         self.clf_num = getattr(args, "clf_num", 1)
         if self.use_insert_distribution:
-            self.embed_plh = Embedding(self.clf_num + 1, self.output_embed_dim * 2, None) # predict mean of distribution + weight of 0
+            self.embed_plh = Embedding(self.clf_num + 2, self.output_embed_dim * 2, None) # predict mean of distribution + weight of 0
         else:
             self.embed_plh = Embedding(self.Kmax, self.output_embed_dim * 2, None)
         self.embed_word_del = Embedding(2, self.output_embed_dim, None)
@@ -1238,7 +1201,7 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                 )
             if self.embed_positions is not None:
                 if self.squash_multi_toks:
-                    positions_ = self.embed_positions(prev_output_tokens[:, 0, :])
+                    positions_ = self.embed_positions(prev_output_tokens[:, 0, :], trunc_pos=True)
                     positions_ = positions_.unsqueeze(1).expand(
                         (prev_output_tokens.size(0),
                         prev_output_tokens.size(1),
@@ -1258,7 +1221,7 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
                         flat_index
                     ][:, :prev_output_squashed.size(1)]
                 else:
-                    positions = self.embed_positions(prev_output_tokens[:, 0, :])
+                    positions = self.embed_positions(prev_output_tokens[:, 0, :], trunc_pos=True)
                     positions = positions.unsqueeze(1).expand(
                         (prev_output_tokens.size(0),
                         prev_output_tokens.size(1),
@@ -1306,7 +1269,7 @@ class MultiLevenshteinTransformerDecoder(FairseqNATDecoder):
         else:
             # embed positions
             positions = (
-                self.embed_positions(prev_output_tokens)
+                self.embed_positions(prev_output_tokens, trunc_pos=True)
                 if self.embed_positions is not None
                 else None
             )
