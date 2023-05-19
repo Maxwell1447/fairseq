@@ -328,7 +328,6 @@ __global__ void backward_kernel(
         delta = (last_idx - idx - 2 * L_N + (idx % 2) - (last_idx % 2)) / 2;
         if (delta != 0)
         {
-            int n;
             int L_n = 2;
             for (n = 0; n < N; n++)
             {

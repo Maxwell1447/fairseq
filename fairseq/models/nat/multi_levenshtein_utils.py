@@ -230,7 +230,7 @@ def pi_star(
     # y_star : B x M
     if y_del.size(1) == 1:
         k = 1
-    ops = libnat2.MultiLevEditOps(y_del.cpu(), y_star.cpu(), k, max_valency, pad_symbol, plh_symbol)
+    ops = libnat2.MultiLevEditOpsCuda(y_del.cpu(), y_star.cpu(), k, max_valency, pad_symbol, plh_symbol)
 
     cmb_tgt = ops.get_cmb().to(device)
     y_tok = ops.get_s_cmb().to(device)

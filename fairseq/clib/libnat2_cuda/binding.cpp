@@ -111,7 +111,7 @@ void getOpsFromBatch(
 //   }
 }
 
-class EditOpsBatch
+class EditOpsBatchCuda
 {
 public:
   const int B;
@@ -123,8 +123,8 @@ public:
   torch::Tensor graph_left;
   torch::Tensor graph_right;
 
-  EditOpsBatch() : B(0), N(0), L_ref(0), L(0), L_short(0) {};
-  EditOpsBatch(
+  EditOpsBatchCuda() : B(0), N(0), L_ref(0), L(0), L_short(0) {};
+  EditOpsBatchCuda(
       torch::Tensor y,
       torch::Tensor ys,
       torch::Tensor Is,
@@ -171,13 +171,13 @@ public:
 };
 
 
-PYBIND11_MODULE(multialign, m) {
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("get_mask", &GetMask, "get mask");
     m.def("get_ref_mask", &GetRefMask, "get mask");
     m.def("build_min_preference", &BuildMinPreference, "build min preference mask");
-    py::class_<EditOpsBatch>(m, "MultiLevEditOps")
+    py::class_<EditOpsBatchCuda>(m, "MultiLevEditOpsCuda")
       .def(py::init<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, const int, const int, const long, const long>())
       .def(py::init<>())
-      .def("get_graph_left", &EditOpsBatch::getGraphLeft)
-      .def("get_graph_right", &EditOpsBatch::getGraphRight);
+      .def("get_graph_left", &EditOpsBatchCuda::getGraphLeft)
+      .def("get_graph_right", &EditOpsBatchCuda::getGraphRight);
 }

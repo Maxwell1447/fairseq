@@ -139,7 +139,7 @@ try:
                     ],
                 ),
                 cpp_extension.CppExtension(
-                    "fairseq.libnat_cuda",
+                    "fairseq.libnat2_cuda",
                     sources=[
                         "fairseq/clib/libnat2_cuda/multialign.cu",
                         "fairseq/clib/libnat2_cuda/binding.cpp",
