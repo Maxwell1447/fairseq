@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from fairseq import metrics, utils
 from fairseq.criterions import FairseqCriterion, register_criterion
 from torch import Tensor
-from fairseq import libdual_cuda
+# from fairseq import libdual_cuda
 import os
 
 

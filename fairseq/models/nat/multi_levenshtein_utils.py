@@ -7,7 +7,7 @@ import math
 import torch
 from fairseq.utils import new_arange
 from fairseq import libnat2
-from fairseq import realigner as realigner_module
+# from fairseq import realigner as realigner_module
 from fairseq import dist_realign_cuda as dist_realign_cuda
 try:
     from fairseq import libnat2_cuda
@@ -259,7 +259,7 @@ def pi_star_2(
     """Optimal operations and states to edit y_del to y_star"""
     # y_del : B x N x M
     # y_star : B x M
-    assert y_del.device() != torch.device('cpu')
+    assert y_del.device != torch.device('cpu')
 
     mask = libnat2_cuda.get_mask(y_star, y_del, pad)
     inverse_mask = (~mask) & (y_del.ne(pad))
