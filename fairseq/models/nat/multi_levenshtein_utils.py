@@ -230,7 +230,7 @@ def pi_star(
     # y_star : B x M
     if y_del.size(1) == 1:
         k = 1
-    ops = libnat2.MultiLevEditOpsCuda(y_del.cpu(), y_star.cpu(), k, max_valency, pad_symbol, plh_symbol)
+    ops = libnat2.MultiLevEditOps(y_del.cpu(), y_star.cpu(), k, max_valency, pad_symbol, plh_symbol)
 
     cmb_tgt = ops.get_cmb().to(device)
     y_tok = ops.get_s_cmb().to(device)
@@ -265,7 +265,9 @@ def pi_star_2(
     inverse_mask = (~mask) & (y_del.ne(pad))
     # print("inverse mask:\n", inverse_mask.cpu().numpy())
 
-    J = inverse_mask.argsort(dim=-1, stable=True)
+    # J = inverse_mask.argsort(dim=-1, stable=True)
+    # J = torch.argsort(inverse_mask, dim=-1, stable=True)
+    J = inverse_mask.sort(dim=-1, stable=True)[1]
     idx = torch.arange(y_del.size(-1), device=y_del.device)[None, None, :].expand_as(y_del)
     Is = idx[
         torch.arange(y_del.size(0), device=y_del.device)[:, None, None],
@@ -296,7 +298,7 @@ def pi_star_2(
 
     max_len = max(y_star.size(1), y_del.size(2))
     # print(ys.shape)
-    solver = libnat2_cuda.MultiLevEditOps(y_star, y_del, Is.int(), lens_short, G, G_offsets, V, max_short_len, max_len, pad, unk)
+    solver = libnat2_cuda.MultiLevEditOpsCuda(y_star, y_del, Is.int(), lens_short, G, G_offsets, V, max_short_len, max_len, pad, unk)
 
     graph_left = solver.get_graph_left().bool()
     graph_right = solver.get_graph_right().bool()
@@ -308,11 +310,13 @@ def pi_star_2(
     del_tgt = (graph_left & del_mask).long()
     # TODO: verify keep or delete !!!! --> seems to be keep for pi_star
     # plh
-    sorted_left = torch.argsort((~graph_left).int(), dim=-1, stable=True)
+    # sorted_left = torch.argsort((~graph_left).int(), dim=-1, stable=True)
+    sorted_left = graph_left.int().sort(dim=-1, stable=True, descending=True)[1]
     y_plh = y_del.gather(-1, sorted_left)
     y_plh[..., 1:][(y_plh == eos).cumsum(-1)[..., :-1].bool()] = 1
     plh_mask = y_plh[..., 1:].ne(pad)
-    sorted_right = torch.argsort((~graph_right).int(), dim=-1, stable=True)
+    # sorted_right = torch.argsort((~graph_right).int(), dim=-1, stable=True)
+    sorted_right = graph_right.int().sort(dim=-1, stable=True, descending=True)[1]
     plh_tgt = sorted_right[..., 1:] - sorted_right[..., :-1] - 1
     plh_tgt[~plh_mask] = 0
     # cmb

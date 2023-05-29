@@ -35,6 +35,7 @@ from .multi_levenshtein_utils import (
     pi_sel,
     pi_mask,
     pi_star,
+    pi_star_2,
     handle_all_plh_case,
     apply_del,
     apply_plh,
@@ -209,6 +210,10 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
 
     @staticmethod
     def combine_res(res1, res2, mask):
+        if res1 is None:
+            return res2
+        if res2 is None:
+            return res1
         res = dict()
         for key in res1:
             shape = [i for i in res1[key].shape]
@@ -283,20 +288,30 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         mask_star = self.get_mask_from_prob(
             prev_output_tokens.size(0), self.beta)  # for pi del
         with torch.no_grad():
-            res_star = pi_star(
-                prev_output_tokens[mask_star][mask_good[mask_star]],
-                tgt_tokens[mask_star][mask_good[mask_star]],
-                max_valency=self.max_valency,
-                pad_symbol=self.pad,
-                plh_symbol=self.unk,
-                Kmax=self.Kmax,
-                device=src_tokens.device,
-            )
-
-            assert ((res_star["y_cmb"] == self.eos).sum(-1) == 1).all().item(
-            ), ((res_star["y_cmb"] == self.bos).sum(-1) == 1).all().item()
-            res_star["del_tgt"] = 1 - res_star["del_tgt"]
-            res_star["del_tgt"][~res_star["del_mask"]] = 0
+            if mask_good[mask_star].any():
+                res_star = pi_star(
+                    prev_output_tokens[mask_star][mask_good[mask_star]],
+                    tgt_tokens[mask_star][mask_good[mask_star]],
+                    max_valency=self.max_valency,
+                    pad_symbol=self.pad,
+                    plh_symbol=self.unk,
+                    Kmax=self.Kmax,
+                    device=src_tokens.device,
+                )
+                # res_star = pi_star_2(
+                #     prev_output_tokens[mask_star][mask_good[mask_star]].clone(),
+                #     tgt_tokens[mask_star][mask_good[mask_star]].clone(),
+                #     pad=self.pad,
+                #     unk=self.unk,
+                #     eos=self.eos,
+                #     Kmax=self.Kmax
+                # )
+                assert ((res_star["y_cmb"] == self.eos).sum(-1) == 1).all().item(
+                ), ((res_star["y_cmb"] == self.bos).sum(-1) == 1).all().item()
+                res_star["del_tgt"] = 1 - res_star["del_tgt"]
+                res_star["del_tgt"][~res_star["del_mask"]] = 0
+            else:
+                res_star = None
             if not mask_good[mask_star].all():
                 # regular levt single alignment
                 del_tgt_bad = list()
