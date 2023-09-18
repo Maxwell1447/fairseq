@@ -622,6 +622,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         history = decoder_out.history
         history_ops = decoder_out.history_ops
 
+        # assert output_tokens[..., 2, 1].eq(self.eos).all().item(), "not all N=2..."
+
         max_lens = 255
         # delete words
         # do not delete tokens if it is <s> </s>

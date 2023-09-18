@@ -290,18 +290,24 @@ class LanguageMultiSourceDataset(FairseqDataset):
             ), "Source and target must contain the same number of examples"
             assert multi_src is not None
             for multi_src_single in multi_src:
-                assert len(multi_src_single) == len(
-                    tgt
-                ), "multi source ({}) and target ({}) must contain the same number of examples".format(
-                    len(multi_src_single), len(tgt)
-                )
+                if multi_src_single is not None:
+                    assert len(multi_src_single) == len(
+                        tgt
+                    ), "multi source ({}) and target ({}) must contain the same number of examples".format(
+                        len(multi_src_single), len(tgt)
+                    )
         self.src = src
         self.multi_src = multi_src
         self.tgt = tgt
         self.src_sizes = np.array(src_sizes)
         self.tgt_sizes = np.array(tgt_sizes) if tgt_sizes is not None else None
         self.multi_src_sizes = (
-            [np.array(size_single) for size_single in multi_src_sizes]
+            [
+                np.array(size_single)
+                if size_single is not None
+                else np.zeros_like(self.tgt_sizes)
+                for size_single in multi_src_sizes
+            ]
             if multi_src_sizes is not None
             else None
         )
@@ -352,7 +358,7 @@ class LanguageMultiSourceDataset(FairseqDataset):
                 logger.info(
                     "bucketing target lengths: {}".format(list(self.tgt.buckets))
                 )
-            if self.mutli_src is not None:
+            if self.multi_src is not None:
                 self.multi_src = [
                     BucketPadLengthDataset(
                         single_src,
@@ -361,12 +367,17 @@ class LanguageMultiSourceDataset(FairseqDataset):
                         pad_idx=self.tgt_dict.pad(),
                         left_pad=self.left_pad_target,
                     )
+                    if single_src is not None
+                    else None
                     for single_src, single_size in zip(
                         self.multi_src, self.multi_src_sizes
                     )
                 ]
-                self.mutli_src_sizes = [
-                    single_src.sizes for single_src in self.multi_src
+                self.multi_src_sizes = [
+                    single_src.sizes
+                    if single_src is not None
+                    else None
+                    for single_src in self.multi_src
                 ]
 
             # determine bucket sizes using self.num_tokens, which will return
@@ -386,7 +397,12 @@ class LanguageMultiSourceDataset(FairseqDataset):
     def __getitem__(self, index):
         tgt_item = self.tgt[index] if self.tgt is not None else None
         multi_src_item = (
-            [single_src[index] for single_src in self.multi_src]
+            [
+                single_src[index]
+                if single_src is not None
+                else torch.LongTensor([self.tgt_dict.bos(), self.tgt_dict.eos()])
+                for single_src in self.multi_src
+            ]
             if self.multi_src is not None
             else None
         )
@@ -405,9 +421,9 @@ class LanguageMultiSourceDataset(FairseqDataset):
             if self.tgt and self.tgt[index][0] != bos:
                 tgt_item = torch.cat([torch.LongTensor([bos]), self.tgt[index]])
 
-            if self.mutli_src:
-                for i, single_src in enumerate(self.mutli_src):
-                    if single_src[index][0] != bos:
+            if self.multi_src:
+                for i, single_src in enumerate(self.multi_src):
+                    if single_src is not None and single_src[index][0] != bos:
                         multi_src_item[i] = torch.cat(
                             [torch.LongTensor([bos]), multi_src_item[i]]
                         )

@@ -42,6 +42,10 @@ class TranslationMultiLevenshteinConfig(TranslationConfig):
         default=1,
         metadata={"help": "number of co-edited sequences from the monoling corpus"},
     )
+    max_num_retrieved: int = field(
+        default=-1,
+        metadata={"help": "number of co-edited sequences from the monoling corpus"},
+    )
     max_acceptable_retrieved_ratio: float = field(
         default=1.8,
         metadata={
@@ -58,6 +62,7 @@ def load_lang_multi_dataset(
     tgt,
     tgt_dict,
     num_multi_src,
+    max_num_multi_src,
     combine,
     dataset_impl,
     upsample_primary,
@@ -131,6 +136,9 @@ def load_lang_multi_dataset(
             tgt_datasets.append(tgt_dataset)
 
         for n in range(num_multi_src):
+            if n >= max_num_multi_src:
+                multi_src_datasets[n] = None
+                break
             single_src_dataset = data_utils.load_indexed_dataset(
                 prefix + tgt + str(n + 1), tgt_dict, dataset_impl
             )
@@ -153,7 +161,9 @@ def load_lang_multi_dataset(
         tgt_dataset = tgt_datasets[0] if len(tgt_datasets) > 0 else None
         for n in range(num_multi_src):
             multi_src_datasets[n] = (
-                multi_src_datasets[n][0] if len(multi_src_datasets[n]) > 0 else None
+                multi_src_datasets[n][0] 
+                if multi_src_datasets[n] is not None and len(multi_src_datasets[n]) > 0 
+                else None
             )
     else:
         sample_ratios = [1] * len(src_datasets)
@@ -164,7 +174,8 @@ def load_lang_multi_dataset(
         else:
             tgt_dataset = None
         for n in range(num_multi_src):
-            multi_src_datasets[n] = ConcatDataset(multi_src_datasets[n], sample_ratios)
+            if multi_src_datasets[n] is not None:
+                multi_src_datasets[n] = ConcatDataset(multi_src_datasets[n], sample_ratios)
 
     if prepend_bos:
         assert hasattr(src_dict, "bos_index") and hasattr(tgt_dict, "bos_index")
@@ -261,6 +272,9 @@ class TranslationMultiLevenshteinTask(TranslationTask):
             tgt,
             self.tgt_dict,
             self.cfg.num_retrieved,
+            self.cfg.max_num_retrieved 
+            if self.cfg.max_num_retrieved > 0 
+            else self.cfg.num_retrieved,
             combine=combine,
             dataset_impl=self.cfg.dataset_impl,
             upsample_primary=self.cfg.upsample_primary,
