@@ -6,7 +6,7 @@ This work is based on [fairseq](https://github.com/facebookresearch/fairseq).
 See original [fairseq README](README-fairseq.md) for more information about fairseq.
 It is an extension of the code of [Levenstein Transformer](https://arxiv.org/abs/1905.11006) to mainly adapt it to multiple sentences.
 
-Find our paper here: [Towards Example-Based NMT with Multi-Levenshtein Transformers](https://rroll.to/45yx6A)
+Find our paper here: [Towards Example-Based NMT with Multi-Levenshtein Transformers](https://arxiv.org/abs/2310.08967)
 
 Abstract:
 > Retrieval-Augmented Machine Translation
