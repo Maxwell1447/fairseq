@@ -50,6 +50,36 @@ spans that are copied from existing instances.
   * [`multi_levenshtein_transformer.py`](./multi_levenshtein_transformer.py) $\longrightarrow$ new model class for mLevT
   * [`multi_levenshtein_utils.py`](./multi_levenshtein_utils.py) $\longrightarrow$ set of utility functions for mLevT
 
+## Experimental data
+
+The multidomain data as well as the train/valid/test-0.4/test-0.6 split is the same as in (Xu et. al, 2023) [(see this github repo)](https://github.com/jitao-xu/tm-levt#data-preprocessing).
+
+The Fuzzy Matching is performed with [Systran's open source code](https://github.com/SYSTRAN/fuzzy-match). The version used can be found in commit [f4c1d7f](https://github.com/SYSTRAN/fuzzy-match/commit/f4c1d7f), accessible via `git checkout f4c1d7f`. After compilation, the following script can be adapted to compute the Fuzzy Matches:
+
+``` bash
+FUZZY_CLI=path/to/cli/src/FuzzyMatch-cli # to adapt
+DATA=path/to/data # to adapt
+l1=... # to adapt
+l2=... # to adapt
+
+# Indexing
+$FUZZY_CLI -a index -c $DATA.$l1,$DATA.$l2 --add-target
+# generated $DATA.$l1.fmi
+
+# Matching
+$FUZZY_CLI -i $DATA.$l1.fmi -a match \
+-f 0.4 \
+-N 8 \
+-n 3 \
+--ml 3 \
+--mr 0.3 \
+--no-perfect \
+< $DATA.en > $DATA.$l1.match
+```
+
+The generated `$DATA.$l1.match` must then be processed to generate `n` files: `$DATA.$l2{1,2,3}` for `n=3`, where each line is a similar sentence (or an empty line if none retrieved). This this the expected format fore preprocessing.
+
+
 ## Data preprocessing
 
 Not only the $(\textbf{x}, \textbf{y})$ source/target pairs need to be processed but also the retrieved examples $(\textbf{y}_1, \cdots, \textbf{y}_N)$. There are two steps: Tokenization+BPE and Binarization
