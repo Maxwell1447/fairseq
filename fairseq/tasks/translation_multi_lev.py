@@ -23,6 +23,7 @@ from fairseq.data import (
     iterators,
 )
 import logging
+import numpy as np
 
 import os
 import itertools
@@ -52,6 +53,12 @@ class TranslationMultiLevenshteinConfig(TranslationConfig):
             "help": "Maximum authorized ratio between retrieved examples and target"
         },
     )
+    max_positions: int = field(
+        default=1024,
+        metadata={
+            "help": "Maximum size of src/mutli-src sentences"
+        },
+    )
 
 
 def load_lang_multi_dataset(
@@ -78,7 +85,17 @@ def load_lang_multi_dataset(
     shuffle=True,
     pad_to_multiple=1,
     prepend_bos_src=None,
+    load_idf=False,
 ):
+    if load_idf and os.exists(os.path.join(data_path, f"idf.{src}.bin")):
+        idf = torch.from_numpy(np.fromfile(os.path.join(data_path, f"idf.{src}.bin"), dtype=np.float32))
+        logger.info(
+            "IDF file loaded successfully: {}".format(
+                os.path.join(data_path, f"idf.{src}.bin")
+            )
+        )
+    else:
+        idf = None
     def split_exists(split, src, tgt, lang, data_path):
         filename = os.path.join(data_path, "{}.{}-{}.{}".format(split, src, tgt, lang))
         return indexed_dataset.dataset_exists(filename, impl=dataset_impl)
@@ -238,6 +255,7 @@ def load_lang_multi_dataset(
         num_buckets=num_buckets,
         shuffle=shuffle,
         pad_to_multiple=pad_to_multiple,
+        idf=idf
     )
 
 
@@ -250,6 +268,9 @@ class TranslationMultiLevenshteinTask(TranslationTask):
 
     cfg: TranslationMultiLevenshteinConfig
     tokenizer = None
+
+    def max_positions(self):
+        return self.cfg.max_positions
 
     def load_dataset(self, split, epoch=1, combine=False, **kwargs):
         """Load a given dataset split.

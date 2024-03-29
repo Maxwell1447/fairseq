@@ -247,7 +247,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         return pred
 
 
-    def forward(self, src_tokens, src_lengths, prev_output_tokens, tgt_tokens, num_iter, ids=None, **kwargs):
+    def forward(self, src_tokens, src_lengths, prev_output_tokens, tgt_tokens, num_iter, idf_tgt=None, ids=None, **kwargs):
         prev_output_tokens, tgt_tokens = self.regularize_shapes(
             prev_output_tokens, tgt_tokens
         )
@@ -286,6 +286,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             res_star = pi_star(
                 prev_output_tokens[mask_star][mask_good[mask_star]],
                 tgt_tokens[mask_star][mask_good[mask_star]],
+                idf_tgt=idf_tgt[mask_star][mask_good[mask_star]] if idf_tgt is not None else None,
                 max_valency=self.max_valency,
                 pad_symbol=self.pad,
                 plh_symbol=self.unk,

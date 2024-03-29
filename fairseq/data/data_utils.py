@@ -347,8 +347,8 @@ def filter_multi_source_dataset_indices_by_size(
     max_multi_src_size = None
     min_size = 0
     if max_sizes is None:
-        max_sizes = 512
-        return indices, []
+        max_sizes = 256
+        # return indices, []
     if type(max_sizes) in (int, float):
         max_src_size, max_tgt_size = max_sizes, max_sizes
         max_multi_src_size = max_sizes

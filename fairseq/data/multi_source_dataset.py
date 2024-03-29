@@ -141,6 +141,14 @@ def collate(
             [s["target"].ne(pad_idx).long().sum() for s in samples]
         ).index_select(0, sort_order)
         ntokens = tgt_lengths.sum().item()
+        idf = merge(
+            "idf",
+            left_pad=left_pad_target,
+            pad_to_length=pad_to_length["target"]
+            if pad_to_length is not None
+            else None,
+        )
+        idf = idf.index_select(0, sort_order)
 
         if samples[0].get("prev_output_tokens", None) is not None:
             prev_output_tokens = merge("prev_output_tokens", left_pad=left_pad_target)
@@ -170,6 +178,7 @@ def collate(
             "tgt_tokens": target,
         },
         "target": target,
+        "idf": idf
     }
     if prev_output_tokens is not None:
         batch["net_input"]["prev_output_tokens"] = prev_output_tokens.index_select(
@@ -214,7 +223,6 @@ def collate(
         batch["constraints"] = constraints.index_select(0, sort_order)
 
     return batch
-
 
 class LanguageMultiSourceDataset(FairseqDataset):
     """
@@ -279,6 +287,7 @@ class LanguageMultiSourceDataset(FairseqDataset):
         src_lang_id=None,
         tgt_lang_id=None,
         pad_to_multiple=1,
+        idf=None,
     ):
         if tgt_dict is not None:
             assert src_dict.pad() == tgt_dict.pad()
@@ -334,6 +343,7 @@ class LanguageMultiSourceDataset(FairseqDataset):
         self.eos = eos if eos is not None else src_dict.eos()
         self.src_lang_id = src_lang_id
         self.tgt_lang_id = tgt_lang_id
+        self.idf = idf
         if num_buckets > 0:
             from fairseq.data import BucketPadLengthDataset
 
@@ -394,6 +404,15 @@ class LanguageMultiSourceDataset(FairseqDataset):
     def get_batch_shapes(self):
         return self.buckets
 
+    def get_tgt_idf(self, tgt_item):
+        if self.idf is None:
+            tgt_idf = torch.ones_like(tgt_item, dtype=torch.float32, device="cpu")
+        else:
+            tgt_idf = torch.gather(self.idf, 0, torch.clamp(tgt_item.cpu() - 4, min=0))
+
+        return tgt_idf
+    
+
     def __getitem__(self, index):
         tgt_item = self.tgt[index] if self.tgt is not None else None
         multi_src_item = (
@@ -442,6 +461,7 @@ class LanguageMultiSourceDataset(FairseqDataset):
             "source": src_item,
             "multi_source": multi_src_item,
             "target": tgt_item,
+            "idf": self.get_tgt_idf(tgt_item) if tgt_item is not None else None
         }
         if self.align_dataset is not None:
             example["alignment"] = self.align_dataset[index]

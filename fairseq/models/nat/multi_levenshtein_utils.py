@@ -3,10 +3,12 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+# run `python setup.py build_ext --inplace` for libnat libraries installation 
+
 import math
 import torch
 from fairseq.utils import new_arange
-from fairseq import libnat2
+from fairseq import libnat2, libnat3
 from fairseq import realigner as realigner_module
 from fairseq import dist_realign_cuda as dist_realign_cuda
 
@@ -220,14 +222,20 @@ def pi_mask(
 
 
 def pi_star(
-    y_del, y_star, k=10, max_valency=-1, pad_symbol=None, plh_symbol=None, Kmax=100, device="cuda:0"
+    y_del, y_star, idf_tgt=None, k=10, max_valency=-1, pad_symbol=None, plh_symbol=None, Kmax=100, device="cuda:0"
 ):
     """Quasi optimal operations and states to edit y_del to y_star"""
     # y_del : B x N x M
     # y_star : B x M
     if y_del.size(1) == 1:
         k = 1
-    ops = libnat2.MultiLevEditOps(y_del.cpu(), y_star.cpu(), k, max_valency, pad_symbol, plh_symbol)
+    if idf_tgt is not None:
+        ops = libnat3.MultiLevEditOpsIDF(
+            y_del.cpu(), y_star.cpu(), idf_tgt.cpu().contiguous(),
+            k, max_valency, 0.1,
+            pad_symbol, plh_symbol)
+    else:
+        ops = libnat2.MultiLevEditOps(y_del.cpu(), y_star.cpu(), k, max_valency, pad_symbol, plh_symbol)
 
     cmb_tgt = ops.get_cmb().to(device)
     y_tok = ops.get_s_cmb().to(device)

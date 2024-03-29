@@ -79,7 +79,7 @@ def _main(cfg: DictConfig, output_file):
 
     use_cuda = torch.cuda.is_available() and not cfg.common.cpu
 
-    if cfg.generation.formatted_file is not None and cfg.generation.formatted_file != "":
+    if cfg.generation.formatted_file is not None and cfg.generation.formatted_file != "" and cfg.generation.retain_iter_history:
         try:
             with open(cfg.generation.formatted_file, 'w') as formatted_file:
                 formatted_file.write("")
