@@ -23,19 +23,8 @@ Edge::Edge(const long x, const long y, const float cost) : x(x), y(y), cost(cost
 
 bool Edge::operator<(Edge const &e) const
 {
-  return (x + y) < (e.x + e.y);
-}
-bool Edge::operator<=(Edge const &e) const
-{
-  return (x + y) <= (e.x + e.y);
-}
-bool Edge::operator>(Edge const &e) const
-{
-  return (x + y) > (e.x + e.y);
-}
-bool Edge::operator>=(Edge const &e) const
-{
-  return (x + y) >= (e.x + e.y);
+  return (x + y < e.x + e.y) || 
+    ((x + y == e.x + e.y) && (abs(y - x) < abs(e.y - e.x)));
 }
 bool Edge::operator==(Edge const &e) const
 {
@@ -78,9 +67,9 @@ bool Node::hasPrec()
 
 vector<Edge> buildGraph(
     const long *left, const long *right,
-    const long &size_left, const long &size_right,
+    const long size_left, const long size_right,
     const float *idf_right,
-    const long &pad)
+    const long pad)
 {
   vector<Edge> graph;
   unordered_map<long, list<long>> leftVertices;
@@ -150,29 +139,37 @@ vector<Node> buildDAGFromGraph(vector<Edge *> &graph, const long &max_valency)
   }
 
   // finalize with target/source
-  for (long i = (long)graph.size() - 1; i >= 0; --i)
+  // ASSUMES first and last necessarily inside
+  if (dag.size() > 4)
   {
-    if (!dag.at(i + 1).hasNext() && dag.at(i + 1).hasPrec())
-    {
-      dag.at(i + 1).addNext(&dag.at(graph.size() + 1));
-      dag.at(graph.size() + 1).addPrec(&dag.at(i + 1));
-      // cout << i << "->" << "t" << endl;
-    }
-    if (!dag.at(i + 1).hasPrec() && dag.at(i + 1).hasNext())
-    {
-      dag.at(i + 1).addPrec(&dag.at(0));
-      dag.at(0).addNext(&dag.at(i + 1));
-      // cout << "s" << "->" << i << endl;
-    }
-    if (!dag.at(i + 1).hasPrec() && !dag.at(i + 1).hasNext())
-    {
-      dag.at(i + 1).addPrec(&dag.at(0));
-      dag.at(0).addNext(&dag.at(i + 1));
-      dag.at(i + 1).addNext(&dag.at(graph.size() + 1));
-      dag.at(graph.size() + 1).addPrec(&dag.at(i + 1));
-      // cout << "s" << "->" << i  << "->" << "t" << endl;
-    }
+      dag.at(graph.size()).addNext(&dag.at(graph.size() + 1));
+      dag.at(graph.size() + 1).addPrec(&dag.at(graph.size()));
+      dag.at(0).addNext(&dag.at(1));
+      dag.at(1).addPrec(&dag.at(0));
   }
+  // for (long i = (long)graph.size() - 1; i >= 0; --i)
+  // {
+  //   if (!dag.at(i + 1).hasNext() && dag.at(i + 1).hasPrec())
+  //   {
+  //     dag.at(i + 1).addNext(&dag.at(graph.size() + 1));
+  //     dag.at(graph.size() + 1).addPrec(&dag.at(i + 1));
+  //     // cout << i << "->" << "t" << endl;
+  //   }
+  //   if (!dag.at(i + 1).hasPrec() && dag.at(i + 1).hasNext())
+  //   {
+  //     dag.at(i + 1).addPrec(&dag.at(0));
+  //     dag.at(0).addNext(&dag.at(i + 1));
+  //     // cout << "s" << "->" << i << endl;
+  //   }
+  //   if (!dag.at(i + 1).hasPrec() && !dag.at(i + 1).hasNext())
+  //   {
+  //     dag.at(i + 1).addPrec(&dag.at(0));
+  //     dag.at(0).addNext(&dag.at(i + 1));
+  //     dag.at(i + 1).addNext(&dag.at(graph.size() + 1));
+  //     dag.at(graph.size() + 1).addPrec(&dag.at(i + 1));
+  //     // cout << "s" << "->" << i  << "->" << "t" << endl;
+  //   }
+  // }
 
   return dag;
 }
@@ -375,6 +372,7 @@ void getOpsFromSingle(
   }
   for (long i = 0; i < n; ++i)
   {
+    // cout << i << endl;
     if (covers[i].size() == 0)
       continue;
     j = choices[i];
@@ -394,7 +392,7 @@ void getOpsFromSingle(
         ins[i * (seq_len - 1) + cpt_index - 1] = e.y - cpt_ins - 1;
       }
       cmb[i * seq_len + e.y] = 1;
-
+      // cout << "s_del[" << i << "," << cpt_index << "] = s_i[" << i << "," << e.x << "] = " << s_i[i * seq_len + e.x] << endl;
       s_del[i * seq_len + cpt_index] = s_i[i * seq_len + e.x];
       s_plh[i * seq_len + e.y] = s_ref[e.y];
       s_cmb[e.y] = s_ref[e.y];

@@ -17,9 +17,6 @@ public:
   const long y;
   const float cost;
   bool operator<(Edge const & e) const;
-  bool operator<=(Edge const & e) const;
-  bool operator>(Edge const & e) const;
-  bool operator>=(Edge const & e) const;
   bool operator==(Edge const & e) const;
   void printEdge() const;
 };

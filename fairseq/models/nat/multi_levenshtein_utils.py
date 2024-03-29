@@ -230,10 +230,14 @@ def pi_star(
     if y_del.size(1) == 1:
         k = 1
     if idf_tgt is not None:
+        print("exs", y_del.shape, y_del.device, y_del.dtype, y_del, file=sys.stderr)
+        print("tgt", y_star.shape, y_star.device, y_star.dtype, y_star, file=sys.stderr)
+        print("idf", idf_tgt.shape, idf_tgt.device, idf_tgt.dtype, idf_tgt, file=sys.stderr)
         ops = libnat3.MultiLevEditOpsIDF(
-            y_del.cpu(), y_star.cpu(), idf_tgt.cpu().contiguous(),
+            y_del.cpu(), y_star.cpu(), idf_tgt.cpu().contiguous().float(),
             k, max_valency, 0.1,
             pad_symbol, plh_symbol)
+        # ops2 = libnat2.MultiLevEditOps(y_del.cpu(), y_star.cpu(), k, max_valency, pad_symbol, plh_symbol)
     else:
         ops = libnat2.MultiLevEditOps(y_del.cpu(), y_star.cpu(), k, max_valency, pad_symbol, plh_symbol)
 
@@ -257,6 +261,33 @@ def pi_star(
         "y_tok": y_tok,
     }
 
+    # print("y_plh 2", ops2.get_s_del().to(device), file=sys.stderr)
+    # print("y_plh 3", res["y_plh"], file=sys.stderr)
+
+
+    # cmb_tgt = ops2.get_cmb().to(device)
+    # y_tok = ops2.get_s_cmb().to(device)
+    
+    # res2 = {
+    #     "del_tgt": ops2.get_del().to(device),
+    #     "plh_tgt": ops2.get_ins().clamp(0, Kmax - 1).to(device),
+    #     "cmb_tgt": cmb_tgt,
+    #     "tok_tgt": y_star,
+    #     "del_mask": y_del.ne(pad_symbol),
+    #     "plh_mask": ops2.get_s_del().ne(pad_symbol).to(device)[:, :, 1:],
+    #     "cmb_mask": y_star.ne(pad_symbol)
+    #         .view(y_star.size(0), 1, y_star.size(1))
+    #         .expand_as(ops2.get_s_ins()),
+    #     "tok_mask": (ops2.get_s_cmb().to(device) == plh_symbol),
+    #     "y_plh": ops2.get_s_del().to(device),
+    #     "y_cmb": ops2.get_s_ins().to(device),
+    #     "y_tok": y_tok,
+    # }
+    # print("res", res, file=sys.stderr)
+    # print("res2", res2, file=sys.stderr)
+    # sys.exit()
+    
+    # return res
 
 def handle_all_plh_case(cmb_tgt, y_tok, y_cmb, plh_symbol):
     # if position with only plh, consider them as acceptable, but only if plh
