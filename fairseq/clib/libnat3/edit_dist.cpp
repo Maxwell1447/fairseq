@@ -133,43 +133,44 @@ vector<Node> buildDAGFromGraph(vector<Edge *> &graph, const long &max_valency)
         current_valency++;
         dag.at(i + 1).addNext(&dag.at(j + 1));
         dag.at(j + 1).addPrec(&dag.at(i + 1));
-        // cout << i << "->" << j << endl;
       }
     }
+    // if (i > 160)
+    //   cout << graph[i]->x << "&" <<  graph[i]->y << endl;
   }
-
+  // cout << "eos idxs: " << graph[graph.size() - 1]->x << ", " << graph[graph.size() - 1]->y << endl;
   // finalize with target/source
   // ASSUMES first and last necessarily inside
-  if (dag.size() > 4)
+  if (dag.size() >= 4)
   {
       dag.at(graph.size()).addNext(&dag.at(graph.size() + 1));
       dag.at(graph.size() + 1).addPrec(&dag.at(graph.size()));
       dag.at(0).addNext(&dag.at(1));
       dag.at(1).addPrec(&dag.at(0));
   }
-  // for (long i = (long)graph.size() - 1; i >= 0; --i)
-  // {
-  //   if (!dag.at(i + 1).hasNext() && dag.at(i + 1).hasPrec())
-  //   {
-  //     dag.at(i + 1).addNext(&dag.at(graph.size() + 1));
-  //     dag.at(graph.size() + 1).addPrec(&dag.at(i + 1));
-  //     // cout << i << "->" << "t" << endl;
-  //   }
-  //   if (!dag.at(i + 1).hasPrec() && dag.at(i + 1).hasNext())
-  //   {
-  //     dag.at(i + 1).addPrec(&dag.at(0));
-  //     dag.at(0).addNext(&dag.at(i + 1));
-  //     // cout << "s" << "->" << i << endl;
-  //   }
-  //   if (!dag.at(i + 1).hasPrec() && !dag.at(i + 1).hasNext())
-  //   {
-  //     dag.at(i + 1).addPrec(&dag.at(0));
-  //     dag.at(0).addNext(&dag.at(i + 1));
-  //     dag.at(i + 1).addNext(&dag.at(graph.size() + 1));
-  //     dag.at(graph.size() + 1).addPrec(&dag.at(i + 1));
-  //     // cout << "s" << "->" << i  << "->" << "t" << endl;
-  //   }
-  // }
+  for (long i = (long)graph.size() - 2; i >= 1; --i)
+  {
+    if (!dag.at(i + 1).hasNext() && dag.at(i + 1).hasPrec())
+    {
+      dag.at(i + 1).addNext(&dag.at(graph.size()));
+      dag.at(graph.size()).addPrec(&dag.at(i + 1));
+      // cout << i << "->" << "t" << endl;
+    }
+    if (!dag.at(i + 1).hasPrec() && dag.at(i + 1).hasNext())
+    {
+      dag.at(i + 1).addPrec(&dag.at(1));
+      dag.at(1).addNext(&dag.at(i + 1));
+      // cout << "s" << "->" << i << endl;
+    }
+    if (!dag.at(i + 1).hasPrec() && !dag.at(i + 1).hasNext())
+    {
+      dag.at(i + 1).addPrec(&dag.at(1));
+      dag.at(1).addNext(&dag.at(i + 1));
+      dag.at(i + 1).addNext(&dag.at(graph.size()));
+      dag.at(graph.size()).addPrec(&dag.at(i + 1));
+      // cout << "s" << "->" << i  << "->" << "t" << endl;
+    }
+  }
 
   return dag;
 }
@@ -177,8 +178,12 @@ vector<Node> buildDAGFromGraph(vector<Edge *> &graph, const long &max_valency)
 void printDAG(vector<Node> &dag)
 {
   for (const Node &node : dag)
+  {
+    cout << node.index << ": ";
     for (const Node *next : node.next)
-      cout << node.index << "->" << next->index << endl;
+      cout << next->index << " ";
+    cout << endl;
+  }
 }
 
 list<long> get_single_longest_path(vector<Node> &dag)
@@ -188,14 +193,19 @@ list<long> get_single_longest_path(vector<Node> &dag)
   // FORWARD
   for (Node &node : dag)
   {
-    node.current_length = 0.f;
-    for (list<Node *>::iterator prec = node.prec.begin(); prec != node.prec.end(); ++prec)
-      if (node.current_length < (*prec)->current_length)
-      {
-        node.current_length = (*prec)->current_length;
-        traceback[node.index] = (*prec)->index;
-      }
-    node.current_length += node.cost; // +1/+IDF
+    node.current_length = -1.f;
+    if (node.prec.size() > 0)
+    {
+      for (list<Node *>::iterator prec = node.prec.begin(); prec != node.prec.end(); ++prec)
+        if (node.current_length < (*prec)->current_length)
+        {
+          node.current_length = (*prec)->current_length;
+          traceback[node.index] = (*prec)->index;
+        }
+      node.current_length += node.cost; // +1/+IDF
+    }
+    else
+      node.current_length = 0.f;
   }
   long index = dag.size() - 1;
   // BACKWARD
@@ -247,6 +257,7 @@ vector<list<Edge>> get_k_best(
     for (const long &e : path)
       if (e <= (long)graph.size() && e > 0)
         for (const unsigned &i : map_right_to_edges[graph_refs[e - 1]->y])
+          if (dag[i + 1].cost > numeric_limits<float>::epsilon() / decay)
           dag[i + 1].cost *= decay;
 
     // test right side redundancy
@@ -434,7 +445,7 @@ void getOpsFromBatch(
         &s_ref[b * s_ref_len],
         s_i_len,
         s_ref_len,
-        idf_ref,
+        &idf_ref[b * s_ref_len],
         n,
         k,
         max_valency,
@@ -458,20 +469,40 @@ void getOpsFromBatch(
 int main()
 {
   // cout << "Hello World!" << endl;
-  const float decay = 0.3f;
+  const float decay = 0.0001f;
   // const vector<long> left_vec = {0, 1, 5, 4};
   // const vector<long> right_vec = {5, 0, 1};
-  const unsigned n = 3;
+  const unsigned n = 1;
   // const vector<long> left_vec = {9, 0, 0, 4, 1, 8,
   //                                9, 8, 10, 10, 10, 10,
   //                                9, 2, 1, 8, 10, 10};
   // const vector<long> right_vec = {9, 1, 0, 0, 4, 8, 10};
-  const vector<long> left_vec = {9, 0, 1, 8,
-                                 9, 8, 10, 10, 10, 10,
-                                 9, 2, 0, 8, 10, 10};
-  const vector<long> right_vec = {9, 1, 0, 0, 4, 8, 10};
+  // const vector<long> left_vec = {
+  //   0,  6, 13,  7, 28,  7, 29,  5,  5,  6,  5,  5, 16,  5,  4,  4, 16,
+  //          6, 29,  6,  4,  2,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
+  //          1,  1,  1,  1,  1,  1,  1,
+  //       0,  4,  5,  5,  5,  5,  6,  7,  5,  7,  4,  6,  4, 22,  7,  7,  7,
+  //          5, 13,  7, 17,  4, 17,  4,  5,  2,  1,  1,  1,  1,  1,  1,  1,  1,
+  //          1,  1,  1,  1,  1,  1,  1
+  // };
+  // const vector<long> right_vec = {
+  //   0, 13,  6, 13, 28,  7, 29,  5,  7,  5,  5,  5,  7,  5, 16,  5,  4,  6,
+  //         4, 29,  4,  5,  5, 14,  5, 18,  5,  6,  5,  7,  6,  7, 13,  7, 17, 17,
+  //         5,  6,  5,  2,  1
+  // };
+  const vector<long> left_vec = {
+          0, 19,  5,  4,  4, 22,  5,  6,  7,  6,  5, 10,  7,  6,  6, 15, 14,
+           7,  4,  5,  7,  4,  6,  4, 23,  2,  1,  1,  1,  1,  1,  1,  1,  1,
+           1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1
+  };
+  const vector<long> right_vec = {
+    0, 19, 19,  5,  5,  4,  6,  4, 22,  6, 22,  5,  6,  5, 10,  7, 28,  6,
+         28, 14, 16,  4,  6,  4,  4, 21,  5,  5, 27,  4,  4,  4, 23, 23, 14,  4,
+         10,  4, 22, 26, 23,  5,  7,  7, 15,  5,  5,  2
+  };
+
   // const vector<float> idf_right_vec = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 0.f};
-  const vector<float> idf_right_vec = {1.f, 1.f, 2.f, 2.f, 1.f, 1.f, 0.f};
+  const vector<float> idf_right_vec(right_vec.size(), 1.f);
   const long *left = &left_vec[0];
   const long *right = &right_vec[0];
   const float *idf_right = &idf_right_vec[0];
@@ -489,10 +520,10 @@ int main()
   long *s_plh = (long *)calloc(n * seq_len, sizeof(long));
   long *s_cmb = (long *)calloc(n * seq_len, sizeof(long));
 
-  const long pad = 10;
-  const long unk = 11;
-  const long max_valency = 5;
-  const unsigned k = 3;
+  const long pad = 1;
+  const long unk = 3;
+  const long max_valency = 10;
+  const unsigned k = 10;
 
   const unsigned left_len = ls / n;
 
@@ -504,6 +535,16 @@ int main()
     del, ins, cmb,
     s_del, s_plh, s_cmb,
     pad, unk);
+
+  cout << "y_plh:" << endl;
+  for (unsigned i = 0; i < n; i++)
+  {
+    for (unsigned j = 0;  j < seq_len; j++)
+    {
+      cout << s_del[i * seq_len + j] << " ";
+    }
+    cout << endl;
+  }
 
   // cout << "del:" << endl;
   // for (unsigned i = 0; i < n; i++)

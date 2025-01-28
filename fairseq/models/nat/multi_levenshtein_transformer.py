@@ -190,7 +190,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
             decoder.apply(init_bert_params)
         return decoder
 
-    def regularize_shapes(self, ys, y):
+    def regularize_shapes(self, ys, y, idf_tgt=None):
         bsz = y.size(0)
         M = max(ys.size(-1), y.size(-1))
         N = ys.size(1)
@@ -200,8 +200,12 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         X = y.new(*shape).fill_(self.pad)
         Xs[:, :, :ys.size(-1)] = ys
         X[:, :y.size(-1)] = y
+        if idf_tgt is not None:
+            IDF = idf_tgt.new(*shape).fill_(1.0)
+            IDF[:, :idf_tgt.size(-1)] = idf_tgt
+            return Xs, X, IDF
 
-        return Xs, X
+        return Xs, X, None
 
     @staticmethod
     def get_mask_from_prob(bsz, p):
@@ -248,8 +252,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
 
 
     def forward(self, src_tokens, src_lengths, prev_output_tokens, tgt_tokens, num_iter, idf_tgt=None, ids=None, **kwargs):
-        prev_output_tokens, tgt_tokens = self.regularize_shapes(
-            prev_output_tokens, tgt_tokens
+        prev_output_tokens, tgt_tokens, idf_tgt = self.regularize_shapes(
+            prev_output_tokens, tgt_tokens, idf_tgt=idf_tgt
         )
         if self.full_levt:
             mask_good = torch.zeros(src_tokens.size(
@@ -273,6 +277,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                                 if (prev_output_tokens_single == bad_tok).sum() > threshold:
                                     mask_good[b] = False
 
+        # num_multi = prev_output_tokens.size(1)
         # encoding
         encoder_out = self.encoder(
             src_tokens, src_lengths=src_lengths, **kwargs)
@@ -476,6 +481,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         post_plh_out, _ = self.decoder.forward_plh(
             normalize=False, prev_output_tokens=y_post_plh, encoder_out=encoder_out,
         )
+        # post_del_extra = True
+        # if post_del_extra: # if post del extra
         with torch.no_grad():
             # apply post_plh_out to y_post_plh
             if self.use_insert_distribution:
@@ -535,6 +542,8 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
         )
 
         output = dict()
+        label_smoothing_type = "uniform"
+        # label_smoothing_type = "binomial"
 
         output["prev_word_del"] = {
             "out": del_out,
@@ -553,7 +562,7 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 "tgt": plh_tgt,
                 "mask": plh_mask,
                 "ls": 0.2, # original = 0.01
-                "ls-type": "binomial" # binomial
+                "ls-type": label_smoothing_type # binomial
             }
         output["cmb"] = {
             "out": cmb_out,
@@ -583,8 +592,9 @@ class MultiLevenshteinTransformerModel(FairseqNATModel):
                 "tgt": post_plh_tgt,
                 "mask": post_plh_mask,
                 "ls": 0.2, # original = 0.0
-                "ls-type": "binomial" # binomial
+                "ls-type": label_smoothing_type # binomial
             }
+        # if post_del_extra: # if post del extra
         output["post_word_del_extra"] = {
             "out": post_del_extra_out,
             "tgt": post_del_extra_tgt,

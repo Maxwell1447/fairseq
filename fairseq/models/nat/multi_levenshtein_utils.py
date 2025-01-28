@@ -230,11 +230,11 @@ def pi_star(
     if y_del.size(1) == 1:
         k = 1
     if idf_tgt is not None:
-        print("exs", y_del.shape, y_del.device, y_del.dtype, y_del, file=sys.stderr)
-        print("tgt", y_star.shape, y_star.device, y_star.dtype, y_star, file=sys.stderr)
-        print("idf", idf_tgt.shape, idf_tgt.device, idf_tgt.dtype, idf_tgt, file=sys.stderr)
+        # print("exs", y_del.shape, y_del.device, y_del.dtype, y_del, file=sys.stderr)
+        # print("tgt", y_star.shape, y_star.device, y_star.dtype, y_star, file=sys.stderr)
+        # print("idf", idf_tgt.shape, idf_tgt.device, idf_tgt.dtype, idf_tgt, file=sys.stderr)
         ops = libnat3.MultiLevEditOpsIDF(
-            y_del.cpu(), y_star.cpu(), idf_tgt.cpu().contiguous().float(),
+            y_del.cpu().contiguous(), y_star.cpu().contiguous(), idf_tgt.cpu().float().contiguous(),
             k, max_valency, 0.1,
             pad_symbol, plh_symbol)
         # ops2 = libnat2.MultiLevEditOps(y_del.cpu(), y_star.cpu(), k, max_valency, pad_symbol, plh_symbol)
@@ -649,7 +649,7 @@ def realign_grad_descent(
             loss_align = align_tok_loss(params, graph, graph_mask, p=p)
             loss = alpha * loss_prob + (1 - alpha) * loss_align + loss_len * len_loss_scale
             int_loss = integer_loss(params, mask_param)
-
+            # print(it, loss.detach().item(), loss_align.detach().item(), loss_prob.detach().item(), loss_len.detach().item(), alpha, len_loss_scale, flush=True, file=sys.stderr)
             loss_tot = (
                 loss
                 + lambda_t(
@@ -663,7 +663,7 @@ def realign_grad_descent(
             )
 
             loss_tot.backward()
-            
+
             optimizer.step()
             scheduler.step()
             params_.data = torch.clamp(params_, 0, Kmax)

@@ -59,6 +59,12 @@ class TranslationMultiLevenshteinConfig(TranslationConfig):
             "help": "Maximum size of src/mutli-src sentences"
         },
     )
+    load_idf: bool = field(
+        default=False,
+        metadata={
+            "help": "Loads array of token IDF. Used for weighted multi-alignment at training time"
+        },
+    )
 
 
 def load_lang_multi_dataset(
@@ -87,7 +93,7 @@ def load_lang_multi_dataset(
     prepend_bos_src=None,
     load_idf=False,
 ):
-    if load_idf and os.exists(os.path.join(data_path, f"idf.{src}.bin")):
+    if load_idf and os.path.exists(os.path.join(data_path, f"idf.{src}.bin")):
         idf = torch.from_numpy(np.fromfile(os.path.join(data_path, f"idf.{src}.bin"), dtype=np.float32))
         logger.info(
             "IDF file loaded successfully: {}".format(
@@ -304,6 +310,7 @@ class TranslationMultiLevenshteinTask(TranslationTask):
             max_source_positions=self.cfg.max_source_positions,
             max_target_positions=self.cfg.max_target_positions,
             prepend_bos=True,
+            load_idf=self.cfg.load_idf
         )
 
     def get_batch_iterator(
